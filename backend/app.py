@@ -1,0 +1,669 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import time
+from collections import deque
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+
+from backend.audio.player import AudioPlayer
+from backend.config import build_field_catalog, merge_config, validate_runtime_config
+from backend.llm.ollama_client import OllamaClient
+from backend.prompting.prompt_builder import PromptBuilder, validate_generated_sentence
+from backend.resource_manager import ResourceManager
+from backend.serial.esp32_link import ESP32Link
+from backend.servo.geometry import compute_servo_angles
+from backend.state_machine import RuntimeState
+from backend.storage.csv_logger import append_audience_snapshot
+from backend.telemetry.system_stats import get_system_stats
+from backend.tts.qwen_clone import QwenCloneTTS
+from backend.types import ConfigUpdateResponse, PipelineStage, RuntimeConfig, SystemMode
+from backend.vision.runtime import VisionRuntime
+
+
+class Brain:
+    def __init__(self) -> None:
+        self.config = RuntimeConfig()
+        self.state = RuntimeState()
+        self.prompts = PromptBuilder("resource/md/system-persona_tracking.md", "resource/md/system-persona_idle.md")
+        self.resources = ResourceManager("tmp")
+        self.audio = AudioPlayer()
+        self.tts = QwenCloneTTS(self.config.tts_model_path, self.config.tts_ref_audio_path, self.config.tts_ref_text_path)
+        self.serial = ESP32Link(self.config.serial_port, self.config.serial_baud_rate)
+        self.vision = VisionRuntime(self.config)
+        self.history: deque[str] = deque(maxlen=10)
+        self.last_target_seen = 0.0
+        self.lock_started_at: float | None = None
+        self.last_idle_line_at = 0.0
+        self.last_sentence_finished_at = 0.0
+        self.cooldown_until = 0.0
+        self.generation_lock = asyncio.Lock()
+        self.background_tasks: list[asyncio.Task] = []
+
+    async def start(self) -> None:
+        self.vision.start()
+        self.background_tasks = [
+            asyncio.create_task(self.vision_loop()),
+            asyncio.create_task(self.housekeeping_loop()),
+        ]
+
+    async def stop(self) -> None:
+        for task in self.background_tasks:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self.vision.stop()
+
+    def snapshot(self):
+        vision = self.vision.get_snapshot()
+        self.state.audience = vision.features
+        snap = self.state.snapshot()
+        snap.stats = get_system_stats("tmp")
+        snap.serial_connected = self.serial.connected
+        snap.tts_loaded = self.tts.loaded
+        snap.camera_device_id = self.config.camera_device_id
+        snap.camera_mode = f"{self.config.camera_width}x{self.config.camera_height}@{self.config.camera_fps}"
+        snap.ollama_connected = True
+        snap.playback_progress = self.audio.progress()
+        return snap
+
+    async def housekeeping_loop(self) -> None:
+        while True:
+            self.resources.cleanup_temp_audio()
+            await asyncio.sleep(30)
+
+    async def vision_loop(self) -> None:
+        while True:
+            try:
+                self._recover_if_pipeline_stuck()
+                self._update_mode_from_vision()
+                if self.state.mode == SystemMode.TRACKING:
+                    await self._maybe_generate_tracking_line()
+                elif self.state.mode == SystemMode.IDLE:
+                    await self._maybe_generate_idle_line()
+                append_audience_snapshot("tmp/audience.csv", self.snapshot())
+            except Exception as exc:
+                self.state.set_pipeline_stage(PipelineStage.ERROR, error=str(exc))
+                self.state.event_log = [f"vision loop error: {exc}", *self.state.event_log][:20]
+                self.last_sentence_finished_at = time.monotonic()
+            await asyncio.sleep(0.2)
+
+    def _recover_if_pipeline_stuck(self) -> None:
+        stage = self.state.pipeline.stage
+        elapsed_ms = self.state.pipeline.elapsed_ms
+        llm_limit_ms = (self.config.ollama_timeout_sec + 5) * 1000
+        tts_limit_ms = 120000
+        if stage == PipelineStage.LLM and elapsed_ms > llm_limit_ms:
+            self.state.set_pipeline_stage(PipelineStage.ERROR, error="LLM timeout watchdog")
+            self.state.event_log = ["watchdog reset LLM stage", *self.state.event_log][:20]
+            self.last_sentence_finished_at = time.monotonic()
+        if stage == PipelineStage.TTS and elapsed_ms > tts_limit_ms:
+            self.state.set_pipeline_stage(PipelineStage.ERROR, error="TTS timeout watchdog")
+            self.state.event_log = ["watchdog reset TTS stage", *self.state.event_log][:20]
+            self.last_sentence_finished_at = time.monotonic()
+        if stage == PipelineStage.PLAYBACK and not self.audio.is_playing():
+            if self.audio.last_error:
+                self.state.set_pipeline_stage(PipelineStage.ERROR, error=self.audio.last_error)
+                self.state.event_log = [f"audio error: {self.audio.last_error}", *self.state.event_log][:20]
+            else:
+                self.state.set_pipeline_stage(PipelineStage.IDLE)
+            self.last_sentence_finished_at = time.monotonic()
+
+    def _update_mode_from_vision(self) -> None:
+        now = time.monotonic()
+        vision = self.vision.get_snapshot()
+        features = vision.features
+        eye_midpoint_x = features.eye_midpoint[0] if features.eye_midpoint else features.center_x_norm
+        self.state.audience = features
+        self.state.servo = compute_servo_angles(
+            eye_midpoint_x_norm=eye_midpoint_x,
+            bbox_area_ratio=features.bbox_area_ratio,
+            left_zero_deg=self.config.servo_left_zero_deg,
+            right_zero_deg=self.config.servo_right_zero_deg,
+            left_limits=(self.config.servo_left_min_deg, self.config.servo_left_max_deg),
+            right_limits=(self.config.servo_right_min_deg, self.config.servo_right_max_deg),
+        )
+        self.state.servo.tracking_source = vision.servo.tracking_source
+        if self.serial.connected and features.track_id is not None:
+            self.serial.send_servo_command(
+                self.state.servo.left_deg,
+                self.state.servo.right_deg,
+                mode="track",
+                tracking_source=self.state.servo.tracking_source,
+            )
+
+        if now < self.cooldown_until:
+            self.state.set_mode(SystemMode.PURGE_COOLDOWN)
+            return
+
+        if features.track_id is None or features.bbox_area_ratio < self.config.lock_bbox_threshold_ratio:
+            if self.state.mode == SystemMode.TRACKING and now - self.last_target_seen <= self.config.lost_timeout_ms / 1000:
+                self.state.set_mode(SystemMode.RECONNECTING, "Target temporarily lost")
+            elif now - self.last_target_seen > self.config.lost_timeout_ms / 1000:
+                self.state.set_mode(SystemMode.IDLE)
+                self.state.locked_track_id = None
+                self.state.sentence_index = 0
+                self.lock_started_at = None
+            return
+
+        self.last_target_seen = now
+        if self.lock_started_at is None:
+            self.lock_started_at = now
+            self.state.set_mode(SystemMode.ACQUIRING)
+            return
+        if now - self.lock_started_at < self.config.enter_debounce_ms / 1000:
+            self.state.set_mode(SystemMode.ACQUIRING)
+            return
+
+        if self.state.mode != SystemMode.TRACKING:
+            self.state.set_mode(SystemMode.TRACKING, "Locked target acquired")
+            self.state.locked_track_id = features.track_id
+            if self.state.sentence_index == 0:
+                self.last_sentence_finished_at = now
+
+    async def _maybe_generate_tracking_line(self) -> None:
+        if self.audio.is_playing() or self.generation_lock.locked():
+            return
+        if self.state.sentence_index >= 10:
+            self.cooldown_until = time.monotonic() + (self.config.purge_cooldown_ms / 1000)
+            self.state.set_mode(SystemMode.PURGE_COOLDOWN, "Sentence limit reached")
+            return
+        delay = 1.0 if self.state.sentence_index == 0 else 0.05
+        if time.monotonic() - self.last_sentence_finished_at < delay:
+            return
+        await self.generate_tracking_line()
+
+    async def _maybe_generate_idle_line(self) -> None:
+        if self.audio.is_playing() or self.generation_lock.locked():
+            return
+        if time.monotonic() - self.last_idle_line_at < self.config.idle_sentence_interval_ms / 1000:
+            return
+        await self.generate_idle_line()
+
+    async def generate_tracking_line(self) -> None:
+        async with self.generation_lock:
+            sentence_index = self.state.sentence_index + 1
+            self.state.active_sentence_index = sentence_index
+            self.state.set_pipeline_stage(PipelineStage.LLM)
+            prompt = self.prompts.build_tracking_prompt(
+                sentence_index=sentence_index,
+                selected_examples=self.config.tracking_examples_selected,
+                audience=self.state.audience,
+                event_summary=self._event_summary(),
+                reacquired=self.state.mode == SystemMode.RECONNECTING or self.state.audience.actions.returned_after_defocus,
+            )
+            self.state.current_prompt_system = prompt["system"]
+            self.state.current_prompt_user = prompt["user"]
+            text = await self._generate_with_ollama(
+                str(prompt["system"]),
+                str(prompt["user"]),
+                22,
+                required_terms=list(prompt.get("required_terms", [])),
+            )
+            await self._speak_line(text)
+            self.state.sentence_index = sentence_index
+            self.state.active_sentence_index = sentence_index
+            self.history.append(text)
+            self.last_sentence_finished_at = time.monotonic()
+
+    async def generate_idle_line(self) -> None:
+        async with self.generation_lock:
+            self.state.set_pipeline_stage(PipelineStage.LLM)
+            prompt = self.prompts.build_idle_prompt(
+                selected_examples=self.config.idle_examples_selected,
+                idle_duration_ms=int((time.monotonic() - self.last_target_seen) * 1000),
+            )
+            self.state.current_prompt_system = prompt["system"]
+            self.state.current_prompt_user = prompt["user"]
+            text = await self._generate_with_ollama(
+                str(prompt["system"]),
+                str(prompt["user"]),
+                15,
+                required_terms=list(prompt.get("required_terms", [])),
+            )
+            await self._speak_line(text)
+            self.last_idle_line_at = time.monotonic()
+
+    async def _generate_with_ollama(self, system: str, prompt: str, limit: int, required_terms: list[str] | None = None) -> str:
+        client = OllamaClient(self.config.ollama_base_url, self.config.ollama_timeout_sec)
+        started = time.monotonic()
+        text = await self._generate_validated_text(client, system, prompt, limit, required_terms or [])
+        self.state.llm_latency_ms = int((time.monotonic() - started) * 1000)
+        self.state.last_llm_output = text
+        return text
+
+    async def _generate_validated_text(self, client: OllamaClient, system: str, prompt: str, limit: int, required_terms: list[str]) -> str:
+        attempts = [
+            {
+                "system": system,
+                "prompt": prompt,
+                "options": {
+                    "num_predict": 48,
+                    "temperature": 0.55,
+                    "top_p": 0.9,
+                    "repeat_penalty": 1.15,
+                    "stop": ["\n\n", "\n- ", "</s>"],
+                },
+            },
+            {
+                "system": system,
+                "prompt": (
+                    f"{prompt}\n"
+                    "重試規則:\n"
+                    f"上次輸出不合規或過短，這次必須直接輸出一個可朗讀的完整句子。\n"
+                    f"句長 8 到 {limit} 字。\n"
+                    "禁止空字串，禁止只輸出標點，禁止解釋。"
+                ),
+                "options": {
+                    "num_predict": 32,
+                    "temperature": 0.3,
+                    "top_p": 0.8,
+                    "repeat_penalty": 1.2,
+                    "stop": ["\n\n", "\n- ", "</s>"],
+                },
+            },
+        ]
+        last_text = ""
+        last_errors: list[str] = []
+        for attempt in attempts:
+            text = await asyncio.wait_for(
+                self._stream_text(client, attempt["system"], attempt["prompt"], attempt["options"]),
+                timeout=self.config.ollama_timeout_sec,
+            )
+            errors = self._validate_output(text, limit, required_terms)
+            if not errors:
+                return self._normalize_sentence(text, limit)
+            last_text = text
+            last_errors = errors
+        repair_prompt = (
+            "把下面這句重寫成繁體中文單句，保留關鍵觀眾特徵或事件，但必須壓到"
+            f" {limit} 字內，不能照抄 examples，不能解釋：\n"
+            f"{last_text}"
+        )
+        repaired = await asyncio.wait_for(
+            self._stream_text(
+                client,
+                system,
+                repair_prompt,
+                {
+                    "num_predict": 24,
+                    "temperature": 0.2,
+                    "top_p": 0.75,
+                    "repeat_penalty": 1.2,
+                    "stop": ["\n\n", "\n- ", "</s>"],
+                },
+            ),
+            timeout=self.config.ollama_timeout_sec,
+        )
+        errors = self._validate_output(repaired, limit, required_terms)
+        if not errors:
+            return self._normalize_sentence(repaired, limit)
+        compressed = await asyncio.wait_for(
+            self._stream_text(
+                client,
+                system,
+                (
+                    f"把這句再縮短成 10 到 {limit} 字的單句繁中台詞，保留一個最重要的觀眾特徵或事件即可：\n"
+                    f"{repaired or last_text}"
+                ),
+                {
+                    "num_predict": 18,
+                    "temperature": 0.1,
+                    "top_p": 0.65,
+                    "repeat_penalty": 1.15,
+                    "stop": ["\n\n", "\n- ", "</s>"],
+                },
+            ),
+            timeout=self.config.ollama_timeout_sec,
+        )
+        errors = self._validate_output(compressed, limit, required_terms)
+        if not errors:
+            return self._normalize_sentence(compressed, limit)
+        if self._contains_required_terms(last_text, required_terms):
+            return self._normalize_sentence(last_text, limit)
+        if self._contains_required_terms(repaired, required_terms):
+            return self._normalize_sentence(repaired, limit)
+        if self._contains_required_terms(compressed, required_terms):
+            return self._normalize_sentence(compressed, limit)
+        raise RuntimeError(
+            f"LLM returned invalid output: {last_errors}; text={last_text!r}"
+        )
+
+    def _validate_output(self, text: str, limit: int, required_terms: list[str]) -> list[str]:
+        errors = validate_generated_sentence(text, limit)
+        if required_terms and not self._contains_required_terms(text, required_terms):
+            errors.append(f"must mention one of required terms: {required_terms}")
+        return errors
+
+    def _contains_required_terms(self, text: str, required_terms: list[str]) -> bool:
+        return any(term and term in text for term in required_terms)
+
+    async def _stream_text(self, client: OllamaClient, system: str, prompt: str, options: dict) -> str:
+        tokens: list[str] = []
+        async for token in client.generate_stream(
+            self.config.ollama_model,
+            system,
+            prompt,
+            options=options,
+        ):
+            tokens.append(token)
+        return "".join(tokens).strip()
+
+    def _normalize_sentence(self, text: str, limit: int) -> str:
+        cleaned = (
+            text.strip()
+            .replace("\n", "")
+            .replace("「", "")
+            .replace("」", "")
+            .replace('"', "")
+        )
+        cleaned = cleaned.strip(" ,.，。!?！？")
+        if len(cleaned) <= limit:
+            return cleaned if cleaned.endswith(("。", "！", "？")) else f"{cleaned[: max(0, limit - 1)]}。"
+        for mark in ["。", "，", "！", "？", ",", "."]:
+            if mark in cleaned[:limit]:
+                segment = cleaned[: cleaned[:limit].rfind(mark)]
+                if segment and len(segment.strip(" ,.，。!?！？")) >= 4:
+                    return segment[: max(0, limit - 1)] + "。"
+        trimmed = cleaned[: max(0, limit - 1)].strip(" ,.，。!?！？")
+        if len(trimmed) < 4:
+            raise RuntimeError(f"LLM returned too-short sentence after normalization: {text!r}")
+        return trimmed + "。"
+
+    async def _speak_line(self, text: str) -> None:
+        self.state.set_pipeline_stage(PipelineStage.TTS)
+        started = time.monotonic()
+        output = await asyncio.wait_for(
+            asyncio.to_thread(self.tts.synthesize, text, "tmp/generated.wav"),
+            timeout=120,
+        )
+        self.state.tts_latency_ms = int((time.monotonic() - started) * 1000)
+        self.state.set_pipeline_stage(PipelineStage.PLAYBACK)
+        self.audio.set_output_device(self.config.audio_output_device)
+        self.audio.play(output, volume=self.config.tts_output_volume)
+        self.state.last_spoken_text = text
+
+    def _event_summary(self) -> str:
+        actions = self.state.audience.actions
+        labels = {
+            "wave": "揮手",
+            "crouch": "蹲下或突然降低高度",
+            "defocus": "過近失焦",
+            "moving_away": "正在遠離",
+            "approaching": "正在貼近",
+            "returned_after_defocus": "失焦後重新進入視線",
+        }
+        names = [labels.get(name, name) for name, value in actions.model_dump().items() if value]
+        return ", ".join(names) if names else "無"
+
+
+brain = Brain()
+
+
+async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[str, str]]:
+    checks: list[dict[str, str]] = []
+    changed = set(payload.keys())
+
+    if changed & {"camera_source", "camera_device_id", "camera_width", "camera_height", "camera_fps"}:
+        if config.camera_source == "browser":
+            checks.append(
+                {
+                    "component": "vision",
+                    "status": "ok",
+                    "message": f"Browser camera config staged: {config.camera_width}x{config.camera_height}@{config.camera_fps}. Applies on next uploaded frame.",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "component": "vision",
+                    "status": "ok",
+                    "message": f"Backend capture reconfigured to device {config.camera_device_id} at {config.camera_width}x{config.camera_height}@{config.camera_fps}.",
+                }
+            )
+
+    if changed & {"tracking_examples_selected", "idle_examples_selected"}:
+        try:
+            brain.prompts.build_tracking_prompt(
+                sentence_index=1,
+                selected_examples=config.tracking_examples_selected,
+                audience=brain.state.audience,
+                event_summary="無",
+                reacquired=False,
+            )
+            brain.prompts.build_idle_prompt(config.idle_examples_selected, 0)
+            checks.append({"component": "prompting", "status": "ok", "message": "Prompt examples reloaded successfully."})
+        except Exception as exc:
+            checks.append({"component": "prompting", "status": "error", "message": f"Prompt reload failed: {exc}"})
+
+    if changed & {"ollama_base_url", "ollama_model", "ollama_timeout_sec"}:
+        client = OllamaClient(config.ollama_base_url, min(config.ollama_timeout_sec, 15))
+        try:
+            models = await client.list_models()
+            if config.ollama_model in models:
+                checks.append({"component": "llm", "status": "ok", "message": f"Ollama reachable and model {config.ollama_model} is available."})
+            else:
+                checks.append({"component": "llm", "status": "error", "message": f"Ollama reachable but model {config.ollama_model} was not found."})
+        except Exception as exc:
+            checks.append({"component": "llm", "status": "error", "message": f"Ollama check failed: {exc}"})
+
+    if changed & {"tts_model_path", "tts_ref_audio_path", "tts_ref_text_path"}:
+        errors: list[str] = []
+        model_path = brain.tts.model_path if hasattr(brain.tts.model_path, "exists") else Path(brain.tts.model_path)
+        ref_audio_path = brain.tts.ref_audio_path if hasattr(brain.tts.ref_audio_path, "exists") else Path(brain.tts.ref_audio_path)
+        ref_text_path = brain.tts.ref_text_path if hasattr(brain.tts.ref_text_path, "exists") else Path(brain.tts.ref_text_path)
+        if not model_path.exists():
+            errors.append(f"missing model path: {model_path}")
+        if not ref_audio_path.exists():
+            errors.append(f"missing ref audio: {ref_audio_path}")
+        if not ref_text_path.exists():
+            errors.append(f"missing ref transcript: {ref_text_path}")
+        if errors:
+            checks.append({"component": "tts", "status": "error", "message": "; ".join(errors)})
+        else:
+            checks.append({"component": "tts", "status": "ok", "message": "TTS paths loaded. Model will stay lazy-loaded until next synthesis."})
+
+    if changed & {"audio_output_device", "tts_output_volume"}:
+        available_ids = {item["id"] for item in AudioPlayer.list_output_devices()}
+        if config.audio_output_device == "default" or config.audio_output_device in available_ids:
+            checks.append({"component": "audio", "status": "ok", "message": f"Audio output set to {config.audio_output_device}."})
+        else:
+            checks.append({"component": "audio", "status": "error", "message": f"Audio output device {config.audio_output_device} was not found."})
+
+    if changed & {"serial_port", "serial_baud_rate"}:
+        if config.serial_port == "auto":
+            message = f"Serial reconfigured to auto detect at {config.serial_baud_rate} baud."
+            status = "ok" if brain.serial.connected else "warning"
+        else:
+            message = f"Serial reconfigured to {config.serial_port} at {config.serial_baud_rate} baud."
+            status = "ok" if brain.serial.connected else "warning"
+            if not brain.serial.connected:
+                message += " Port not connected right now."
+        checks.append({"component": "serial", "status": status, "message": message})
+
+    if changed & {
+        "servo_left_zero_deg",
+        "servo_right_zero_deg",
+        "servo_left_min_deg",
+        "servo_left_max_deg",
+        "servo_right_min_deg",
+        "servo_right_max_deg",
+        "servo_smoothing_alpha",
+        "servo_max_speed_deg_per_sec",
+    }:
+        checks.append({"component": "servo", "status": "ok", "message": "Servo math config updated and will apply on next tracking update."})
+
+    if changed & {
+        "lock_bbox_threshold_ratio",
+        "unlock_bbox_threshold_ratio",
+        "enter_debounce_ms",
+        "exit_debounce_ms",
+        "lost_timeout_ms",
+        "eye_loss_timeout_ms",
+        "defocus_bbox_threshold_ratio",
+        "focus_score_threshold",
+        "feature_match_threshold",
+        "wave_detection_enabled",
+        "crouch_detection_enabled",
+        "wave_window_ms",
+        "crouch_delta_threshold",
+    }:
+        checks.append({"component": "vision-rules", "status": "ok", "message": "Vision thresholds and action rules updated."})
+
+    if not checks:
+        checks.append({"component": "config", "status": "ok", "message": "No runtime changes detected."})
+    return checks
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await brain.start()
+    try:
+        yield
+    finally:
+        await brain.stop()
+
+
+app = FastAPI(title="Momo Brain", version="0.2.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/status")
+async def get_status():
+    return brain.snapshot()
+
+
+@app.get("/api/config")
+async def get_config():
+    return {"config": brain.config, "fields": build_field_catalog(brain.config)}
+
+
+@app.post("/api/config", response_model=ConfigUpdateResponse)
+async def update_config(payload: dict):
+    try:
+        merged = merge_config(brain.config, payload)
+    except ValueError as exc:
+        return ConfigUpdateResponse(
+            applied_config=brain.config,
+            validation_errors=[str(exc)],
+            effective_changes=[],
+            apply_checks=[{"component": "config", "status": "error", "message": "Payload merge failed."}],
+            requires_pipeline_restart=False,
+        )
+    errors = validate_runtime_config(merged)
+    if errors:
+        return ConfigUpdateResponse(
+            applied_config=brain.config,
+            validation_errors=errors,
+            effective_changes=[],
+            apply_checks=[{"component": "config", "status": "error", "message": "Validation failed. Nothing was applied."}],
+            requires_pipeline_restart=False,
+        )
+    changed = [key for key, value in payload.items() if getattr(brain.config, key) != value]
+    brain.config = merged
+    brain.serial = ESP32Link(brain.config.serial_port, brain.config.serial_baud_rate)
+    brain.tts = QwenCloneTTS(brain.config.tts_model_path, brain.config.tts_ref_audio_path, brain.config.tts_ref_text_path)
+    brain.vision.reconfigure(brain.config)
+    apply_checks = await build_apply_checks(payload, brain.config)
+    return ConfigUpdateResponse(
+        applied_config=brain.config,
+        validation_errors=[],
+        effective_changes=changed,
+        apply_checks=apply_checks,
+        requires_pipeline_restart=False,
+    )
+
+
+@app.get("/api/cameras")
+async def get_cameras():
+    return brain.vision.list_cameras()
+
+
+@app.get("/api/camera/frame.jpg")
+async def get_camera_frame():
+    frame = brain.vision.get_snapshot().frame_jpeg
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No frame available")
+    return Response(content=frame, media_type="image/jpeg")
+
+
+@app.post("/api/camera/frame")
+async def post_camera_frame(request: Request):
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty frame")
+    state = brain.vision.submit_jpeg_frame(body)
+    return {
+        "track_id": state.features.track_id,
+        "eye_confidence": state.features.eye_confidence,
+        "tracking_source": state.servo.tracking_source,
+    }
+
+
+@app.get("/api/serial/ports")
+async def get_serial_ports():
+    return ESP32Link.list_ports()
+
+
+@app.get("/api/audio/devices")
+async def get_audio_devices():
+    return AudioPlayer.list_output_devices()
+
+
+@app.get("/api/ollama/models")
+async def get_ollama_models():
+    client = OllamaClient(brain.config.ollama_base_url, brain.config.ollama_timeout_sec)
+    try:
+        models = await client.list_models()
+    except Exception:
+        models = [brain.config.ollama_model]
+    return {"models": models}
+
+
+@app.post("/api/control/recenter-servos")
+async def recenter_servos():
+    payload = brain.serial.send_servo_command(brain.config.servo_left_zero_deg, brain.config.servo_right_zero_deg, mode="idle_scan", tracking_source="manual")
+    return {"command": payload}
+
+
+@app.post("/api/control/simulate-track")
+async def simulate_track(payload: dict):
+    sentence_index = int(payload.get("sentence_index", 1))
+    if not 1 <= sentence_index <= 10:
+        raise HTTPException(status_code=400, detail="sentence_index must be between 1 and 10")
+    await brain.generate_tracking_line()
+    return brain.snapshot()
+
+
+@app.post("/api/control/simulate-pipeline")
+async def simulate_pipeline(payload: dict):
+    sentence_index = int(payload.get("sentence_index", 1))
+    if sentence_index > 1:
+        brain.state.sentence_index = sentence_index - 1
+    if "top_color" in payload:
+        brain.state.audience.top_color = str(payload["top_color"])
+    if "bottom_color" in payload:
+        brain.state.audience.bottom_color = str(payload["bottom_color"])
+    if "height_class" in payload:
+        brain.state.audience.height_class = str(payload["height_class"])
+    if "build_class" in payload:
+        brain.state.audience.build_class = str(payload["build_class"])
+    if "distance_class" in payload:
+        brain.state.audience.distance_class = str(payload["distance_class"])
+    await brain.generate_tracking_line()
+    return {"snapshot": brain.snapshot()}

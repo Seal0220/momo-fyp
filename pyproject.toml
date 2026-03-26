@@ -1,0 +1,37 @@
+[project]
+name = "momo"
+version = "0.1.0"
+description = "Interactive audience tracking MVP with Ollama, Qwen TTS, and ESP32 SG90 eyes"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "fastapi>=0.116.0",
+  "httpx>=0.28.0",
+  "lap>=0.5.13",
+  "opencv-python>=4.13.0.92",
+  "psutil>=7.0.0",
+  "pydantic-settings>=2.10.0",
+  "pyserial>=3.5",
+  "python-multipart>=0.0.20",
+  "qwen-tts>=0.1.1",
+  "sounddevice>=0.5.5",
+  "soundfile>=0.13.1",
+  "torch>=2.11.0",
+  "torchaudio>=2.11.0",
+  "torchvision>=0.26.0",
+  "typing-extensions>=4.14.0",
+  "ultralytics>=8.4.27",
+  "uvicorn>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+package = false
+
