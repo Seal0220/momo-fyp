@@ -27,6 +27,7 @@ class PromptBuilder:
         stage_examples = stages.get(sentence_index, [])
         if not stage_examples:
             raise ValueError(f"no stage examples found for sentence {sentence_index}")
+        best_reference = self._pick_best_reference(stage_examples, audience, event_summary)
         style_lines = "\n".join(
             f"- 階段靈感{index + 1}: {row['event_hint'] or '一般觀察'}"
             for index, row in enumerate(stage_examples)
@@ -45,24 +46,35 @@ class PromptBuilder:
             "3. 只允許一行繁體中文完整句子。\n"
             "4. 句長必須在 8 到 22 字之間。\n"
             "5. 若未滿足條件，立刻重寫，不可輸出空字串。\n"
-            "6. 不可直接重寫或輕微改寫任何 reference 例句，不可與參考句出現 6 個以上連續相同字。"
+            "6. 這次不是自由創作，而是 reference 句的定向改寫。\n"
+            "7. 要保留 reference 的句型骨架、停頓位置、前半句與後半句的功能，再把內容替換成當前觀眾特徵與事件。\n"
+            "8. 目標是和 reference 保持約 0.6 到 0.7 的相似度：像同一句的改寫版，不可完全照抄，也不可離得太遠。"
         )
         user_prompt = (
             f"任務: 生成第 {sentence_index} 句追蹤台詞。\n"
-            f"階段限制: 只能參考第 {sentence_index} 句 examples 的壓迫程度、觀察方向與節奏，不可跳段，也不可照抄。\n"
+            f"階段限制: 只能參考第 {sentence_index} 句 examples 的句法骨架、壓迫程度、觀察方向與節奏，不可跳段。\n"
+            f"本次最貼近的 reference 句:\n- 句子: {best_reference['example_text']}\n"
+            f"- 為何選它: {best_reference['event_hint'] or '同一句階段'}\n"
             f"第 {sentence_index} 句階段靈感:\n{style_lines}\n"
             f"{reacquire_lines}\n"
             f"觀眾特徵摘要: {feature_summary}\n"
             f"即時事件: {event_summary or '無特殊事件'}\n"
             f"本句觀察優先順序: {self._priority_hint(event_summary, audience)}\n"
+            "改寫方法:\n"
+            "- 先把 reference 句當底稿\n"
+            "- 只替換其中的顏色、體型、動作、距離、身體部位或形容詞\n"
+            "- 其餘句法、停頓、問句或陳述句形式盡量保留\n"
+            "- 讓人一眼看出這是同一句的改寫版\n"
             "輸出檢查:\n"
             "- 必須反映至少一個觀眾特徵或事件\n"
             "- 若有即時事件，台詞核心必須先落在事件上\n"
             "- 若沒有即時事件，台詞核心要落在顏色、距離、身形三者之一\n"
             "- 禁止只寫抽象感受而不點出具體觀察\n"
+            "- 要像 reference 的同一句改寫，不可完全換成另一種寫法\n"
+            "- 儘量保留 reference 的停頓位置、前後半句結構、問句或陳述句型\n"
+            "- 允許替換 reference 中的顏色、體型、動作、距離詞\n"
             "- 必須是完整句子\n"
             "- 必須能直接拿去朗讀\n"
-            "- 要有新鮮變化，不能像 examples 的近似改寫\n"
             "- 直接輸出台詞，不要任何其他文字"
         )
         return {
@@ -120,6 +132,38 @@ class PromptBuilder:
                 keywords.extend(["遠", "退"])
             return list(dict.fromkeys(keywords))
         return [audience.top_color, DISTANCE_LABELS.get(audience.distance_class, audience.distance_class)]
+
+    def _pick_best_reference(
+        self,
+        stage_examples: list[dict[str, str]],
+        audience: AudienceFeatures,
+        event_summary: str,
+    ) -> dict[str, str]:
+        def score(row: dict[str, str]) -> int:
+            if row.get("example_text", "").startswith(("(", "（")):
+                return -100
+            hint = row.get("event_hint", "")
+            points = 0
+            if event_summary and event_summary != "無":
+                for token in ["揮手", "蹲", "失焦", "近", "遠", "粉", "黑", "白", "高", "矮", "胖", "瘦"]:
+                    if token in event_summary and token in hint:
+                        points += 3
+            for token in [audience.top_color, audience.bottom_color]:
+                if token != "unknown" and token in hint:
+                    points += 2
+            shape_tokens = {
+                "tall": "高",
+                "short": "矮",
+                "broad": "胖",
+                "slim": "瘦",
+            }
+            for key, token in shape_tokens.items():
+                value = audience.height_class if key in {"tall", "short"} else audience.build_class
+                if value == key and token in hint:
+                    points += 2
+            return points
+
+        return max(stage_examples, key=score)
 
 
 def validate_generated_sentence(text: str, limit: int) -> list[str]:

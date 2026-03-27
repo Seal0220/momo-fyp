@@ -21,8 +21,8 @@ def test_tracking_prompt_uses_stage_specific_examples():
     assert "揮手" in prompt["user"]
     assert "粉色" in prompt["user"]
     assert "最近歷史" not in prompt["user"]
-    assert "你在揮手？是在跟你的理智告別嗎？真可愛。" not in prompt["user"]
-    assert "不可直接重寫" in prompt["system"]
+    assert "你在揮手？是在跟你的理智告別嗎？真可愛。" in prompt["user"]
+    assert "0.6 到 0.7" in prompt["system"]
     assert "揮" in prompt["required_terms"]
 
 
