@@ -65,7 +65,10 @@ class Brain:
     def _prepare_runtime_models(self) -> None:
         ensure_runtime_models(self.config)
         self.tts = QwenCloneTTS(self.config.tts_model_path, self.config.tts_ref_audio_path, self.config.tts_ref_text_path)
-        self.tts.preload()
+        try:
+            self.tts.preload()
+        except Exception as exc:
+            self.state.event_log = [f"TTS preload failed: {exc}", *self.state.event_log][:20]
         self.vision = VisionRuntime(self.config)
 
     def snapshot(self):

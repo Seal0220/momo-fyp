@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import platform
+import shutil
 import subprocess
 import threading
 import warnings
@@ -78,16 +79,55 @@ class QwenCloneTTS:
         output.parent.mkdir(parents=True, exist_ok=True)
         if output.exists():
             return str(output)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=UserWarning)
-            warnings.simplefilter("ignore", category=FutureWarning)
-            wav, sr = librosa.load(self.ref_audio_path, sr=24000, mono=True)
+        wav, sr = self._load_reference_audio()
         if len(wav) > 24000 * 8:
             start = max(0, (len(wav) - (24000 * 8)) // 2)
             wav = wav[start:start + 24000 * 8]
         wav = self._normalize_waveform(wav)
         sf.write(output, wav, 24000)
         return str(output)
+
+    def _load_reference_audio(self) -> tuple[np.ndarray, int]:
+        source = Path(self.ref_audio_path)
+        try:
+            return self._load_audio_with_librosa(str(source))
+        except Exception as exc:
+            converted = self._convert_reference_audio_with_ffmpeg(source)
+            if converted is None:
+                raise RuntimeError(
+                    "Failed to decode TTS reference audio. "
+                    "On Windows, convert the reference file to WAV or install ffmpeg so .m4a can be decoded."
+                ) from exc
+            return self._load_audio_with_librosa(str(converted))
+
+    def _load_audio_with_librosa(self, path: str) -> tuple[np.ndarray, int]:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            warnings.simplefilter("ignore", category=FutureWarning)
+            return librosa.load(path, sr=24000, mono=True)
+
+    def _convert_reference_audio_with_ffmpeg(self, source: Path) -> Path | None:
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg is None:
+            return None
+        converted = Path("tmp/ref_voice_source.wav")
+        converted.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(source),
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                str(converted),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return converted if converted.exists() else None
 
     def _normalize_waveform(self, wav: np.ndarray) -> np.ndarray:
         wav = np.asarray(wav, dtype=np.float32)

@@ -102,6 +102,38 @@ def test_speak_line_reports_tts_timeout_ms():
         brain.config.tts_timeout_sec = original_timeout
 
 
+def test_prepare_runtime_models_does_not_crash_on_tts_preload_failure(monkeypatch):
+    original_vision = brain.vision
+    original_tts = brain.tts
+    original_event_log = list(brain.state.event_log)
+
+    class FailingTTS:
+        loaded = False
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def preload(self) -> None:
+            raise RuntimeError("decode failed")
+
+    class DummyVision:
+        def __init__(self, config):
+            self.config = config
+
+    monkeypatch.setattr("backend.app.QwenCloneTTS", FailingTTS)
+    monkeypatch.setattr("backend.app.VisionRuntime", DummyVision)
+
+    try:
+        brain._prepare_runtime_models()
+        assert brain.vision.config is brain.config
+        assert brain.tts.loaded is False
+        assert any("TTS preload failed: decode failed" in item for item in brain.state.event_log)
+    finally:
+        brain.vision = original_vision
+        brain.tts = original_tts
+        brain.state.event_log = original_event_log
+
+
 def test_get_config_reflects_latest_applied_value():
     client.post("/api/config", json={"camera_fps": 15})
     response = client.get("/api/config")
