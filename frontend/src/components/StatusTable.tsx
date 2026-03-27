@@ -1,6 +1,12 @@
 import type { StatusSnapshot } from "../lib/types";
 
-export function StatusTable({ status }: { status: StatusSnapshot }) {
+export function StatusTable({
+  status,
+  config,
+}: {
+  status: StatusSnapshot;
+  config: Record<string, unknown>;
+}) {
   const actions = status.audience.actions;
   const activeEvents = Object.entries(actions).filter(([, v]) => v).map(([k]) => k).join(", ") || "none";
   return (
@@ -23,6 +29,9 @@ export function StatusTable({ status }: { status: StatusSnapshot }) {
           <tr><th>Tracking Source</th><td>{status.servo.tracking_source}</td></tr>
           <tr><th>Camera Mode</th><td>{status.camera_mode ?? "-"}</td></tr>
           <tr><th>Playback</th><td>{Math.round(status.playback_progress * 100)}%</td></tr>
+          <tr><th>Pipeline Elapsed</th><td>{status.pipeline.elapsed_ms} ms</td></tr>
+          <tr><th>LLM Timeout</th><td>{Number(config.ollama_timeout_sec ?? 0) * 1000 || "-"} ms</td></tr>
+          <tr><th>TTS Timeout</th><td>{Number(config.tts_timeout_sec ?? 0) * 1000 || "-"} ms</td></tr>
           <tr><th>LLM Latency</th><td>{status.llm_latency_ms ?? "-"} ms</td></tr>
           <tr><th>TTS Latency</th><td>{status.tts_latency_ms ?? "-"} ms</td></tr>
           <tr><th>LLM Output</th><td>{status.last_llm_output ?? "-"}</td></tr>

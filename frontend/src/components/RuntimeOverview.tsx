@@ -22,6 +22,7 @@ export function RuntimeOverview({
         <RuntimeItem label="Camera Device" value={String(config.camera_device_id ?? "-")} />
         <RuntimeItem label="Applied Camera Mode" value={status.camera_mode ?? "-"} />
         <RuntimeItem label="Audio Output" value={String(config.audio_output_device ?? "-")} />
+        <RuntimeItem label="TTS Timeout" value={`${String(config.tts_timeout_sec ?? "-")} s`} />
         <RuntimeItem label="Serial Port" value={String(config.serial_port ?? "-")} />
         <RuntimeItem label="Lock Threshold" value={String(config.lock_bbox_threshold_ratio ?? "-")} />
         <RuntimeItem label="Defocus Threshold" value={String(config.defocus_bbox_threshold_ratio ?? "-")} />

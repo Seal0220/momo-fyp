@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 from fastapi.testclient import TestClient
 
 from backend.app import app, brain
@@ -64,6 +67,39 @@ def test_update_config_tts_path_no_server_error():
     payload = response.json()
     assert payload["validation_errors"] == []
     assert any(item["component"] == "tts" for item in payload["apply_checks"])
+
+
+def test_update_config_tts_timeout_validation_failure_returns_feedback():
+    response = client.post("/api/config", json={"tts_timeout_sec": 0})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "tts_timeout_sec must be >= 1" in payload["validation_errors"]
+
+
+def test_speak_line_reports_tts_timeout_ms():
+    original_tts = brain.tts
+    original_timeout = brain.config.tts_timeout_sec
+
+    class SlowTTS:
+        loaded = False
+
+        def synthesize(self, text: str, output_path: str) -> str:
+            time.sleep(0.05)
+            return output_path
+
+    brain.tts = SlowTTS()
+    brain.config.tts_timeout_sec = 0.01
+
+    try:
+        try:
+            asyncio.run(brain._speak_line("測試"))
+            assert False, "expected timeout"
+        except RuntimeError as exc:
+            assert "TTS timeout after" in str(exc)
+            assert "limit 10.0 ms" in str(exc)
+    finally:
+        brain.tts = original_tts
+        brain.config.tts_timeout_sec = original_timeout
 
 
 def test_get_config_reflects_latest_applied_value():

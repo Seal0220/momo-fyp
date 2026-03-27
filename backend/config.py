@@ -46,6 +46,7 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str | None]] = {
     "tts_model_path": ("TTS Model Path", "Local Qwen TTS model path.", None),
     "tts_ref_audio_path": ("TTS Ref Audio", "Reference audio used for voice clone prompt.", None),
     "tts_ref_text_path": ("TTS Ref Transcript", "Transcript paired with the reference audio.", None),
+    "tts_timeout_sec": ("TTS Timeout", "Maximum time allowed for TTS warmup or synthesis.", "1-3600"),
     "tts_output_volume": ("TTS Volume", "Playback volume multiplier.", "0-2"),
     "audio_output_device": ("Audio Output", "Audio output device id used for playback.", None),
     "tts_autoplay": ("TTS Autoplay", "Automatically play synthesized audio.", None),
@@ -99,6 +100,7 @@ FIELD_GROUPS: dict[str, str] = {
     "tts_model_path": "tts",
     "tts_ref_audio_path": "tts",
     "tts_ref_text_path": "tts",
+    "tts_timeout_sec": "tts",
     "tts_output_volume": "tts",
     "audio_output_device": "tts",
     "tts_autoplay": "tts",
@@ -181,6 +183,8 @@ def validate_runtime_config(candidate: RuntimeConfig) -> list[str]:
         errors.append("unlock_bbox_threshold_ratio must be between 0.01 and 0.95")
     if candidate.ollama_timeout_sec < 1:
         errors.append("ollama_timeout_sec must be >= 1")
+    if candidate.tts_timeout_sec < 1:
+        errors.append("tts_timeout_sec must be >= 1")
     if candidate.history_max_sentences != 10:
         errors.append("history_max_sentences must be fixed at 10 for MVP")
     for path in candidate.tracking_examples_selected + candidate.idle_examples_selected:

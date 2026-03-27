@@ -126,7 +126,7 @@ export function Dashboard() {
         />
         <RuntimeOverview status={status} config={config} applyChecks={updateState.applyChecks} />
         <PipelineStage active={status.pipeline.stage} elapsedMs={status.pipeline.elapsed_ms} />
-        <StatusTable status={status} />
+        <StatusTable status={status} config={config} />
         <PromptPanel status={status} />
         <SystemStats status={status} />
         <EventLog items={status.event_log} />

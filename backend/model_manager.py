@@ -43,7 +43,7 @@ def _ensure_yolo_asset(target_path: str) -> dict[str, str]:
 
 def _ensure_tts_model(target_path: str) -> dict[str, str]:
     target = Path(target_path)
-    if target.is_dir() and any(target.iterdir()):
+    if target.exists() and any(target.iterdir()):
         return {
             "component": "tts-model",
             "status": "ok",
@@ -62,6 +62,8 @@ def _ensure_tts_model(target_path: str) -> dict[str, str]:
     snapshot_download(
         repo_id=DEFAULT_QWEN_TTS_REPO,
         local_dir=str(target),
+        local_dir_use_symlinks=False,
+        resume_download=True,
     )
     return {
         "component": "tts-model",

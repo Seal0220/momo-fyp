@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import platform
 import subprocess
 import threading
+import warnings
 from pathlib import Path
 
 import librosa
@@ -20,6 +22,10 @@ class QwenCloneTTS:
         self._lock = threading.Lock()
         self.available = Path(model_path).exists() and Path(ref_audio_path).exists() and Path(ref_text_path).exists()
         self._prepared_ref_audio: str | None = None
+
+    def preload(self) -> None:
+        with self._lock:
+            self._ensure_model()
 
     def _ensure_model(self) -> None:
         if self._model is not None:
@@ -62,7 +68,8 @@ class QwenCloneTTS:
         wav = np.asarray(wavs[0], dtype=np.float32)
         wav = self._normalize_waveform(wav)
         if self._looks_broken(wav, sr):
-            return self._fallback_say_tts(text, output)
+            if platform.system() == "Darwin":
+                return self._fallback_say_tts(text, output)
         sf.write(output, wav, sr)
         return str(output)
 
@@ -71,7 +78,10 @@ class QwenCloneTTS:
         output.parent.mkdir(parents=True, exist_ok=True)
         if output.exists():
             return str(output)
-        wav, sr = librosa.load(self.ref_audio_path, sr=24000, mono=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            warnings.simplefilter("ignore", category=FutureWarning)
+            wav, sr = librosa.load(self.ref_audio_path, sr=24000, mono=True)
         if len(wav) > 24000 * 8:
             start = max(0, (len(wav) - (24000 * 8)) // 2)
             wav = wav[start:start + 24000 * 8]
@@ -99,7 +109,10 @@ class QwenCloneTTS:
             check=True,
             capture_output=True,
         )
-        wav, sr = librosa.load(str(aiff_path), sr=24000, mono=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            warnings.simplefilter("ignore", category=FutureWarning)
+            wav, sr = librosa.load(str(aiff_path), sr=24000, mono=True)
         wav = self._normalize_waveform(wav)
         sf.write(output, wav, sr)
         aiff_path.unlink(missing_ok=True)

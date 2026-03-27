@@ -157,6 +157,7 @@ class RuntimeConfig(BaseModel):
     tts_model_path: str = "model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-1.7B-Base"
     tts_ref_audio_path: str = "resource/voice/ref-voice.m4a"
     tts_ref_text_path: str = "resource/voice/transcript.txt"
+    tts_timeout_sec: int = 300
     tts_output_volume: float = 1.0
     audio_output_device: str = "default"
     tts_autoplay: bool = True

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from collections import deque
 from contextlib import asynccontextmanager
@@ -46,7 +47,8 @@ class Brain:
         self.background_tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
-        await asyncio.to_thread(self._prepare_runtime_models)
+        if should_prepare_models():
+            await asyncio.to_thread(self._prepare_runtime_models)
         self.vision.start()
         self.background_tasks = [
             asyncio.create_task(self.vision_loop()),
@@ -63,6 +65,7 @@ class Brain:
     def _prepare_runtime_models(self) -> None:
         ensure_runtime_models(self.config)
         self.tts = QwenCloneTTS(self.config.tts_model_path, self.config.tts_ref_audio_path, self.config.tts_ref_text_path)
+        self.tts.preload()
         self.vision = VisionRuntime(self.config)
 
     def snapshot(self):
@@ -103,7 +106,7 @@ class Brain:
         stage = self.state.pipeline.stage
         elapsed_ms = self.state.pipeline.elapsed_ms
         llm_limit_ms = (self.config.ollama_timeout_sec + 5) * 1000
-        tts_limit_ms = 120000
+        tts_limit_ms = self.config.tts_timeout_sec * 1000
         if stage == PipelineStage.LLM and elapsed_ms > llm_limit_ms:
             self.state.set_pipeline_stage(PipelineStage.ERROR, error="LLM timeout watchdog")
             self.state.event_log = ["watchdog reset LLM stage", *self.state.event_log][:20]
@@ -384,10 +387,15 @@ class Brain:
     async def _speak_line(self, text: str) -> None:
         self.state.set_pipeline_stage(PipelineStage.TTS)
         started = time.monotonic()
-        output = await asyncio.wait_for(
-            asyncio.to_thread(self.tts.synthesize, text, "tmp/generated.wav"),
-            timeout=120,
-        )
+        try:
+            output = await asyncio.wait_for(
+                asyncio.to_thread(self.tts.synthesize, text, "tmp/generated.wav"),
+                timeout=self.config.tts_timeout_sec,
+            )
+        except asyncio.TimeoutError as exc:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            self.state.tts_latency_ms = elapsed_ms
+            raise RuntimeError(f"TTS timeout after {elapsed_ms} ms (limit {self.config.tts_timeout_sec * 1000} ms)") from exc
         self.state.tts_latency_ms = int((time.monotonic() - started) * 1000)
         self.state.set_pipeline_stage(PipelineStage.PLAYBACK)
         self.audio.set_output_device(self.config.audio_output_device)
@@ -409,6 +417,10 @@ class Brain:
 
 
 brain = Brain()
+
+
+def should_prepare_models() -> bool:
+    return os.getenv("MOMO_SKIP_MODEL_BOOTSTRAP") != "1"
 
 
 async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[str, str]]:
@@ -461,7 +473,7 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
         except Exception as exc:
             checks.append({"component": "llm", "status": "error", "message": f"Ollama check failed: {exc}"})
 
-    if changed & {"tts_model_path", "tts_ref_audio_path", "tts_ref_text_path"}:
+    if changed & {"tts_model_path", "tts_ref_audio_path", "tts_ref_text_path", "tts_timeout_sec"}:
         errors: list[str] = []
         model_path = brain.tts.model_path if hasattr(brain.tts.model_path, "exists") else Path(brain.tts.model_path)
         ref_audio_path = brain.tts.ref_audio_path if hasattr(brain.tts.ref_audio_path, "exists") else Path(brain.tts.ref_audio_path)
@@ -475,7 +487,7 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
         if errors:
             checks.append({"component": "tts", "status": "error", "message": "; ".join(errors)})
         else:
-            checks.append({"component": "tts", "status": "ok", "message": "TTS paths loaded. Model will stay lazy-loaded until next synthesis."})
+            checks.append({"component": "tts", "status": "ok", "message": f"TTS ready. Timeout set to {config.tts_timeout_sec * 1000} ms."})
 
     if changed & {"audio_output_device", "tts_output_volume"}:
         available_ids = {item["id"] for item in AudioPlayer.list_output_devices()}
@@ -584,16 +596,17 @@ async def update_config(payload: dict):
             apply_checks=[{"component": "config", "status": "error", "message": "Validation failed. Nothing was applied."}],
             requires_pipeline_restart=False,
         )
-    try:
-        await asyncio.to_thread(ensure_runtime_models, merged)
-    except Exception as exc:
-        return ConfigUpdateResponse(
-            applied_config=brain.config,
-            validation_errors=[str(exc)],
-            effective_changes=[],
-            apply_checks=[{"component": "model-download", "status": "error", "message": f"Model preparation failed: {exc}"}],
-            requires_pipeline_restart=False,
-        )
+    if should_prepare_models():
+        try:
+            await asyncio.to_thread(ensure_runtime_models, merged)
+        except Exception as exc:
+            return ConfigUpdateResponse(
+                applied_config=brain.config,
+                validation_errors=[str(exc)],
+                effective_changes=[],
+                apply_checks=[{"component": "model-download", "status": "error", "message": f"Model preparation failed: {exc}"}],
+                requires_pipeline_restart=False,
+            )
     changed = [key for key, value in payload.items() if getattr(brain.config, key) != value]
     brain.config = merged
     brain.serial = ESP32Link(brain.config.serial_port, brain.config.serial_baud_rate)
