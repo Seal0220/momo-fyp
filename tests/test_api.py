@@ -363,3 +363,27 @@ def test_suppress_transient_spikes_repairs_short_two_sample_burst() -> None:
 
     assert abs(float(repaired[3])) < 0.1
     assert abs(float(repaired[4])) < 0.1
+
+
+def test_suppress_transient_spikes_repairs_short_three_sample_burst() -> None:
+    tts = QwenCloneTTS("model", "voice.wav", "transcript.txt")
+    wav = np.array([0.0, 0.01, 0.0, 0.55, -0.5, 0.48, 0.01, 0.0, 0.0], dtype=np.float32)
+
+    repaired = tts._suppress_transient_spikes(wav)
+
+    assert np.max(np.abs(repaired[3:6])) < 0.12
+
+
+def test_select_best_waveform_prefers_lower_click_score(monkeypatch) -> None:
+    tts = QwenCloneTTS("model", "voice.wav", "transcript.txt")
+    direct = np.array([0.0, 0.01, 0.02], dtype=np.float32)
+    repaired = np.array([0.0, 0.3, -0.3], dtype=np.float32)
+
+    def fake_finalize(wav, sr, repair_spikes):
+        return repaired if repair_spikes else direct
+
+    monkeypatch.setattr(tts, "_finalize_waveform", fake_finalize)
+
+    selected = tts._select_best_waveform(np.array([0.0], dtype=np.float32), 24000)
+
+    assert np.array_equal(selected, direct)

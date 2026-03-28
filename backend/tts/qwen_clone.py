@@ -80,7 +80,7 @@ class QwenCloneTTS:
                 max_new_tokens=256,
             )
         wav = np.asarray(wavs[0], dtype=np.float32)
-        wav = self._polish_waveform(wav, sr)
+        wav = self._select_best_waveform(wav, sr)
         if self._looks_broken(wav, sr):
             if platform.system() == "Darwin":
                 return self._fallback_say_tts(text, output)
@@ -176,10 +176,18 @@ class QwenCloneTTS:
         wav = np.asarray(wav, dtype=np.float32)
         peak = float(np.max(np.abs(wav))) if wav.size else 0.0
         if peak > 0:
-            wav = wav / peak * 0.85
+            wav = wav / peak * 0.78
         return wav
 
     def _polish_waveform(self, wav: np.ndarray, sr: int) -> np.ndarray:
+        return self._finalize_waveform(wav, sr, repair_spikes=True)
+
+    def _select_best_waveform(self, wav: np.ndarray, sr: int) -> np.ndarray:
+        direct = self._finalize_waveform(wav, sr, repair_spikes=False)
+        repaired = self._finalize_waveform(wav, sr, repair_spikes=True)
+        return repaired if self._click_score(repaired) <= self._click_score(direct) else direct
+
+    def _finalize_waveform(self, wav: np.ndarray, sr: int, repair_spikes: bool) -> np.ndarray:
         wav = np.asarray(wav, dtype=np.float32)
         if wav.size == 0:
             return wav
@@ -189,8 +197,11 @@ class QwenCloneTTS:
 
         # Soft limiting before normalization reduces sharp clipped transients.
         wav = np.tanh(wav * 1.2)
-        wav = self._suppress_transient_spikes(wav)
+        if repair_spikes:
+            wav = self._suppress_transient_spikes(wav)
         wav = self._normalize_waveform(wav)
+        if repair_spikes:
+            wav = self._smooth_residual_clicks(wav, jump_threshold=0.16, dev_scale=0.06)
 
         # Short fade-in/out prevents hard edge pops at playback boundaries.
         fade_samples = min(max(1, int(sr * 0.012)), wav.size // 2)
@@ -201,15 +212,24 @@ class QwenCloneTTS:
             wav[-fade_samples:] *= fade_out
         return wav
 
+    def _click_score(self, wav: np.ndarray) -> tuple[int, int, float]:
+        diffs = np.abs(np.diff(wav))
+        severe = int(np.sum(diffs > 0.25))
+        moderate = int(np.sum(diffs > 0.18))
+        tail = float(np.quantile(diffs, 0.999)) if diffs.size else 0.0
+        return severe, moderate, tail
+
     def _suppress_transient_spikes(self, wav: np.ndarray) -> np.ndarray:
         if wav.size < 5:
             return wav
         repaired = wav.copy()
-        for _ in range(2):
+        for _ in range(3):
             diffs = np.diff(repaired)
             median_abs = max(1e-5, float(np.median(np.abs(diffs))))
-            jump_threshold = max(0.12, median_abs * 10.0)
+            jump_threshold = min(max(0.1, median_abs * 8.0), 0.22)
             dev_scale = max(0.08, median_abs * 8.0)
+
+            repaired = self._repair_short_spike_spans(repaired, jump_threshold, dev_scale)
 
             # Replace isolated impulse-like samples with linear interpolation.
             for idx in range(2, repaired.size - 2):
@@ -243,6 +263,73 @@ class QwenCloneTTS:
                 ):
                     repaired[idx] = repaired[idx - 1] * 0.67 + repaired[idx + 2] * 0.33
                     repaired[idx + 1] = repaired[idx - 1] * 0.33 + repaired[idx + 2] * 0.67
+            repaired = self._smooth_residual_clicks(repaired, jump_threshold, dev_scale)
+        return repaired
+
+    def _repair_short_spike_spans(self, wav: np.ndarray, jump_threshold: float, dev_scale: float) -> np.ndarray:
+        repaired = wav.copy()
+        diff_idx = np.where(np.abs(np.diff(repaired)) > jump_threshold)[0]
+        if diff_idx.size == 0:
+            return repaired
+
+        spans: list[tuple[int, int]] = []
+        start = int(diff_idx[0])
+        prev = int(diff_idx[0])
+        for idx in diff_idx[1:]:
+            idx = int(idx)
+            if idx == prev + 1:
+                prev = idx
+                continue
+            spans.append((start, prev))
+            start = prev = idx
+        spans.append((start, prev))
+
+        for diff_start, diff_end in spans:
+            sample_start = diff_start + 1
+            sample_end = diff_end
+            if sample_end < sample_start:
+                continue
+            span_len = sample_end - sample_start + 1
+            if span_len > 3 or sample_start < 2 or sample_end >= repaired.size - 2:
+                continue
+
+            left_anchor = sample_start - 1
+            right_anchor = sample_end + 1
+            context = np.concatenate(
+                [
+                    repaired[max(0, left_anchor - 2):left_anchor + 1],
+                    repaired[right_anchor:min(repaired.size, right_anchor + 3)],
+                ]
+            )
+            local_median = float(np.median(context))
+            local_mad = max(1e-5, float(np.median(np.abs(context - local_median))))
+            segment = repaired[sample_start:sample_end + 1]
+            if np.max(np.abs(segment - local_median)) < max(dev_scale, local_mad * 5.0):
+                continue
+
+            repaired[sample_start:sample_end + 1] = np.linspace(
+                repaired[left_anchor],
+                repaired[right_anchor],
+                span_len + 2,
+                dtype=np.float32,
+            )[1:-1]
+        return repaired
+
+    def _smooth_residual_clicks(self, wav: np.ndarray, jump_threshold: float, dev_scale: float) -> np.ndarray:
+        repaired = wav.copy()
+        for idx in range(2, repaired.size - 2):
+            local = repaired[idx - 2:idx + 3]
+            local_median = float(np.median(local))
+            if abs(repaired[idx] - local_median) < dev_scale:
+                continue
+            if max(abs(repaired[idx] - repaired[idx - 1]), abs(repaired[idx + 1] - repaired[idx])) < jump_threshold * 0.85:
+                continue
+            repaired[idx] = (
+                repaired[idx - 1] * 0.2
+                + repaired[idx] * 0.45
+                + repaired[idx + 1] * 0.2
+                + local_median * 0.15
+            )
         return repaired
 
     def _looks_broken(self, wav: np.ndarray, sr: int) -> bool:
