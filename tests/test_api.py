@@ -2,6 +2,7 @@ import asyncio
 import time
 from pathlib import Path
 
+import numpy as np
 from fastapi.testclient import TestClient
 
 from backend.app import app, brain
@@ -287,3 +288,78 @@ def test_reference_audio_prefers_ffmpeg_for_mp3(monkeypatch):
     assert wav == [1.0]
     assert sr == 24000
     assert loaded_paths == ["tmp/ref_voice_source.wav"]
+
+
+def test_reference_cache_path_changes_with_source_file(tmp_path):
+    source_a = tmp_path / "voice-a.wav"
+    source_b = tmp_path / "voice-b.wav"
+    source_a.write_bytes(b"a")
+    source_b.write_bytes(b"b")
+
+    tts_a = QwenCloneTTS("model", str(source_a), "transcript.txt")
+    tts_b = QwenCloneTTS("model", str(source_b), "transcript.txt")
+
+    assert tts_a._reference_cache_path(source_a) != tts_b._reference_cache_path(source_b)
+
+
+def test_load_reference_text_reads_transcript(tmp_path):
+    transcript = tmp_path / "ref.txt"
+    transcript.write_text("新的參考逐字稿", encoding="utf-8")
+    tts = QwenCloneTTS("model", "voice.wav", str(transcript))
+
+    assert tts._load_reference_text() == "新的參考逐字稿"
+
+
+def test_load_reference_text_skips_long_ascii_transcript(tmp_path):
+    transcript = tmp_path / "ref.txt"
+    transcript.write_text(
+        (
+            "great embodiment of Chaos hear me for ages Untold I studied your ways devoting my existence to you "
+            "through every season and every silent night until the end of time itself"
+        ),
+        encoding="utf-8",
+    )
+    tts = QwenCloneTTS("model", "voice.wav", str(transcript))
+
+    assert tts._load_reference_text() is None
+
+
+def test_load_reference_text_keeps_short_ascii_transcript(tmp_path):
+    transcript = tmp_path / "ref.txt"
+    transcript.write_text(
+        "great embodiment of Chaos hear me, I studied your ways and devoted my existence to you",
+        encoding="utf-8",
+    )
+    tts = QwenCloneTTS("model", "voice.wav", str(transcript))
+
+    assert tts._load_reference_text() is not None
+
+
+def test_polish_waveform_applies_fades_and_recenters() -> None:
+    tts = QwenCloneTTS("model", "voice.wav", "transcript.txt")
+    wav = np.ones(2400, dtype=np.float32) * 0.5
+
+    polished = tts._polish_waveform(wav, 24000)
+
+    assert abs(float(np.mean(polished))) < 0.05
+    assert abs(float(polished[0])) < 1e-4
+    assert abs(float(polished[-1])) < 1e-4
+
+
+def test_suppress_transient_spikes_interpolates_impulses() -> None:
+    tts = QwenCloneTTS("model", "voice.wav", "transcript.txt")
+    wav = np.array([0.0, 0.02, 0.01, 0.72, 0.0, -0.01, 0.0], dtype=np.float32)
+
+    repaired = tts._suppress_transient_spikes(wav)
+
+    assert abs(float(repaired[3])) < 0.02
+
+
+def test_suppress_transient_spikes_repairs_short_two_sample_burst() -> None:
+    tts = QwenCloneTTS("model", "voice.wav", "transcript.txt")
+    wav = np.array([0.0, 0.01, 0.0, 0.6, -0.55, 0.02, 0.01, 0.0], dtype=np.float32)
+
+    repaired = tts._suppress_transient_spikes(wav)
+
+    assert abs(float(repaired[3])) < 0.1
+    assert abs(float(repaired[4])) < 0.1
