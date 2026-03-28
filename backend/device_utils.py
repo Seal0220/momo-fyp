@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import platform
 
 
@@ -20,8 +21,22 @@ def get_torch_device() -> str:
     return "cpu"
 
 
+def get_vision_device() -> str:
+    override = os.getenv("MOMO_VISION_DEVICE")
+    if override:
+        return override
+    if platform.system() == "Darwin":
+        # torch 2.4.1 + MPS produces truncated YOLO boxes on live browser frames.
+        return "cpu"
+    return get_torch_device()
+
+
 def expected_accelerator_label() -> str:
     return "mps" if platform.system() == "Darwin" else "gpu"
+
+
+def expected_vision_backend_label() -> str:
+    return backend_label_for_device(get_vision_device())
 
 
 def backend_label_for_device(device: str) -> str:

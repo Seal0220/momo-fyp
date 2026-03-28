@@ -129,9 +129,11 @@ class VisionRuntime:
         return capture
 
     def _loop(self) -> None:
-        self.capture = self._open_capture()
         while self.running:
             if self.config.camera_source == "browser":
+                if self.capture:
+                    self.capture.release()
+                    self.capture = None
                 if self.external_frame_at and time.monotonic() - self.external_frame_at < 2.0:
                     time.sleep(0.2)
                     continue
@@ -140,7 +142,9 @@ class VisionRuntime:
             if self.camera_disabled:
                 time.sleep(5)
                 continue
-            if not self.capture or not self.capture.isOpened():
+            if not self.capture:
+                self.capture = self._open_capture()
+            if not self.capture.isOpened():
                 self.failed_open_count += 1
                 if self.failed_open_count >= 3:
                     self.camera_disabled = True
@@ -229,6 +233,13 @@ class VisionRuntime:
             right_eye_bbox=face.right_eye_bbox,
             eye_midpoint=face.eye_midpoint,
             eye_confidence=face.eye_confidence,
+            left_wrist_point=[round(pose.left_wrist_x_norm, 4), round(pose.left_wrist_y_norm, 4)]
+            if pose.left_wrist_x_norm is not None and pose.left_wrist_y_norm is not None
+            else None,
+            right_wrist_point=[round(pose.right_wrist_x_norm, 4), round(pose.right_wrist_y_norm, 4)]
+            if pose.right_wrist_x_norm is not None and pose.right_wrist_y_norm is not None
+            else None,
+            pose_confidence=pose.pose_confidence,
             actions=actions,
         )
         servo = ServoTelemetry(tracking_source=face.tracking_source)
@@ -247,6 +258,10 @@ class VisionRuntime:
                 x = int(features.eye_midpoint[0] * width)
                 y = int(features.eye_midpoint[1] * height)
                 cv2.circle(frame, (x, y), 5, (255, 255, 255), -1)
+            if features.left_wrist_point:
+                self._draw_point(frame, features.left_wrist_point, width, height, (255, 210, 87), "L Wrist")
+            if features.right_wrist_point:
+                self._draw_point(frame, features.right_wrist_point, width, height, (255, 148, 87), "R Wrist")
         cv2.putText(
             frame,
             f"track={features.track_id} dist={features.distance_class} focus={features.focus_score:.2f}",
@@ -262,3 +277,17 @@ class VisionRuntime:
         x1, y1, x2, y2 = bbox
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         cv2.putText(frame, label, (x1, max(18, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    def _draw_point(
+        self,
+        frame: np.ndarray,
+        point: list[float],
+        width: int,
+        height: int,
+        color: tuple[int, int, int],
+        label: str,
+    ) -> None:
+        x = int(point[0] * width)
+        y = int(point[1] * height)
+        cv2.circle(frame, (x, y), 7, color, -1)
+        cv2.putText(frame, label, (x + 10, max(18, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)

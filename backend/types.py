@@ -54,6 +54,9 @@ class AudienceFeatures(BaseModel):
     right_eye_bbox: list[int] | None = None
     eye_midpoint: list[float] | None = None
     eye_confidence: float = 0.0
+    left_wrist_point: list[float] | None = None
+    right_wrist_point: list[float] | None = None
+    pose_confidence: float = 0.0
     actions: ActionFlags = Field(default_factory=ActionFlags)
 
 

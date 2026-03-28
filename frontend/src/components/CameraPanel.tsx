@@ -102,6 +102,8 @@ export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720
           {status.audience.face_bbox && <Box bbox={status.audience.face_bbox} width={width} height={height} label="Face" className="face-bbox" />}
           {status.audience.left_eye_bbox && <Box bbox={status.audience.left_eye_bbox} width={width} height={height} label="L Eye" className="eye-bbox left-eye" />}
           {status.audience.right_eye_bbox && <Box bbox={status.audience.right_eye_bbox} width={width} height={height} label="R Eye" className="eye-bbox right-eye" />}
+          {status.audience.left_wrist_point && <Point point={status.audience.left_wrist_point} label="L Wrist" className="wrist-point left-wrist" />}
+          {status.audience.right_wrist_point && <Point point={status.audience.right_wrist_point} label="R Wrist" className="wrist-point right-wrist" />}
         </div>
       </div>
       <p className="hint">
@@ -119,6 +121,29 @@ export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720
         </span>
       </div>
     </section>
+  );
+}
+
+function Point({
+  point,
+  label,
+  className,
+}: {
+  point: [number, number];
+  label: string;
+  className: string;
+}) {
+  const [x, y] = point;
+  return (
+    <div
+      className={`point ${className}`}
+      style={{
+        left: `${x * 100}%`,
+        top: `${y * 100}%`,
+      }}
+    >
+      <span>{label}</span>
+    </div>
   );
 }
 

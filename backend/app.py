@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.audio.player import AudioPlayer
 from backend.config import build_field_catalog, merge_config, validate_runtime_config
-from backend.device_utils import expected_accelerator_label
+from backend.device_utils import expected_accelerator_label, expected_vision_backend_label
 from backend.llm.ollama_client import OllamaClient
 from backend.model_manager import ensure_runtime_models
 from backend.prompting.prompt_builder import PromptBuilder, validate_generated_sentence
@@ -79,12 +79,13 @@ class Brain:
 
     async def _collect_startup_diagnostics(self) -> list[str]:
         expected = expected_accelerator_label()
-        lines = [f"[startup] expected_accelerator={expected}"]
+        vision_expected = expected_vision_backend_label()
+        lines = [f"[startup] expected_accelerator={expected}", f"[startup] expected_vision_backend={vision_expected}"]
         try:
             person_backend = await asyncio.to_thread(self.vision.detector.warmup)
             pose_backend = await asyncio.to_thread(self.vision.pose.warmup)
             lines.append(
-                f"[startup] yolo person={person_backend} pose={pose_backend} target={expected} ok={person_backend == expected and pose_backend == expected}"
+                f"[startup] yolo person={person_backend} pose={pose_backend} target={vision_expected} ok={person_backend == vision_expected and pose_backend == vision_expected}"
             )
         except Exception as exc:
             lines.append(f"[startup] yolo error={exc}")

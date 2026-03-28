@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from ultralytics import YOLO
 
-from backend.device_utils import backend_label_for_device, get_torch_device
+from backend.device_utils import backend_label_for_device, get_vision_device
 
 
 @dataclass
@@ -25,7 +25,7 @@ class PoseTracker:
     def __init__(self, model_path: str, conf: float = 0.25) -> None:
         self.model_path = model_path
         self.conf = conf
-        self.device = get_torch_device()
+        self.device = get_vision_device()
         self._model: YOLO | None = None
 
     def _ensure_model(self) -> YOLO:
@@ -39,7 +39,7 @@ class PoseTracker:
         return backend_label_for_device(self.device)
 
     def detect(self, frame: np.ndarray, person_bbox: list[int]) -> PoseSignals:
-        x1, y1, x2, y2 = person_bbox
+        x1, y1, x2, y2 = _expand_bbox(person_bbox, frame.shape)
         roi = frame[max(0, y1):max(y1 + 1, y2), max(0, x1):max(x1 + 1, x2)]
         if roi.size == 0:
             return PoseSignals()
@@ -49,7 +49,10 @@ class PoseTracker:
         result = results[0]
         if result.keypoints is None or result.keypoints.data is None or len(result.keypoints.data) == 0:
             return PoseSignals()
-        keypoints = result.keypoints.data[0].cpu().numpy()
+        keypoints_index = 0
+        if result.boxes is not None and result.boxes.conf is not None and len(result.boxes.conf) > 0:
+            keypoints_index = int(result.boxes.conf.argmax().item())
+        keypoints = result.keypoints.data[keypoints_index].cpu().numpy()
         if keypoints.shape[0] < 15:
             return PoseSignals()
         frame_height, frame_width = frame.shape[:2]
@@ -84,3 +87,18 @@ def _avg_norm_y(keypoints: np.ndarray, indices: list[int], offset_x: int, offset
     if not present:
         return None
     return float(sum(present) / len(present))
+
+
+def _expand_bbox(bbox: list[int], frame_shape: tuple[int, ...], pad_x_ratio: float = 0.25, pad_y_ratio: float = 0.15) -> list[int]:
+    x1, y1, x2, y2 = bbox
+    width = max(1, x2 - x1)
+    height = max(1, y2 - y1)
+    pad_x = int(width * pad_x_ratio)
+    pad_y = int(height * pad_y_ratio)
+    frame_height, frame_width = frame_shape[:2]
+    return [
+        max(0, x1 - pad_x),
+        max(0, y1 - pad_y),
+        min(frame_width, x2 + pad_x),
+        min(frame_height, y2 + pad_y),
+    ]

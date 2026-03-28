@@ -33,6 +33,9 @@ export type StatusSnapshot = {
     bbox_area_ratio: number;
     eye_midpoint?: [number, number] | null;
     eye_confidence: number;
+    left_wrist_point?: [number, number] | null;
+    right_wrist_point?: [number, number] | null;
+    pose_confidence: number;
     actions: {
       wave: boolean;
       crouch: boolean;
