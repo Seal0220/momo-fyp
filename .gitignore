@@ -3,6 +3,8 @@
 Thumbs.db
 .vscode/
 .idea/
+.agents/
+.claude/
 
 # Python
 .venv/
