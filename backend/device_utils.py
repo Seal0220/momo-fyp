@@ -46,6 +46,9 @@ def get_vision_device() -> str:
     if platform.system() == "Darwin":
         # torch 2.4.1 + MPS produces truncated YOLO boxes on live browser frames.
         return "cpu"
+    if platform.system() == "Windows":
+        # Keep the small VRAM budget available for Ollama/TTS on Windows.
+        return "cpu"
     return get_torch_device()
 
 
