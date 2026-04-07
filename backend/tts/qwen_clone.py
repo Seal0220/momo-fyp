@@ -189,7 +189,7 @@ class FishCloneTTS:
         ref_text_path: str,
         *,
         clone_voice_enabled: bool,
-        sample_text: str = "這是一個系統啟動測試。",
+        sample_text: str = "測試。",
     ) -> TTSAutoBenchmarkSelection | None:
         plans = benchmark_plans_for_current_host()
         if not plans:
@@ -214,9 +214,9 @@ class FishCloneTTS:
                     sample_text,
                     f"tmp/tts_benchmark_{plan.name}.wav",
                     request_overrides={
-                        "chunk_length": 80,
-                        "max_new_tokens": 96,
-                        "temperature": 0.55,
+                        "chunk_length": 32,
+                        "max_new_tokens": 24,
+                        "temperature": 0.35,
                     },
                 )
                 after = capture_process_footprint(candidate.device)

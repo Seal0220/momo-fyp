@@ -50,18 +50,20 @@ def resolve_accelerator_mode() -> str | None:
 
 
 def benchmark_plans_for_current_host() -> list[SemanticRuntimePlan]:
-    plans = [SemanticRuntimePlan(name="cpu", device_mode="cpu", semantic_dispatch_mode="single")]
     accelerator = resolve_accelerator_mode()
-    if accelerator:
-        plans.append(SemanticRuntimePlan(name=accelerator, device_mode=accelerator, semantic_dispatch_mode="single"))
-        if accelerate_available():
-            plans.append(
-                SemanticRuntimePlan(
-                    name=f"semantic-auto-{accelerator}",
-                    device_mode=accelerator,
-                    semantic_dispatch_mode="auto",
-                )
+    if not accelerator:
+        return [SemanticRuntimePlan(name="cpu", device_mode="cpu", semantic_dispatch_mode="single")]
+
+    plans = [SemanticRuntimePlan(name=accelerator, device_mode=accelerator, semantic_dispatch_mode="single")]
+    if accelerate_available():
+        plans.append(
+            SemanticRuntimePlan(
+                name=f"semantic-auto-{accelerator}",
+                device_mode=accelerator,
+                semantic_dispatch_mode="auto",
             )
+        )
+    plans.append(SemanticRuntimePlan(name="cpu", device_mode="cpu", semantic_dispatch_mode="single"))
     return plans
 
 

@@ -143,9 +143,11 @@ npm run build
 - Windows 預設會把 YOLO 與 Fish Audio TTS 放到 `cuda:0`，並把本程序的 CUDA 記憶體上限設成 `72%`，保留剩餘 VRAM 給 Ollama；可用 `MOMO_CUDA_MEMORY_FRACTION` 覆寫。
 - macOS 會讓 YOLO 走 `cpu`，Fish Audio TTS 走 `MPS`。
 - 若 `TTS Device` 在 UI 或 config 是 `auto`，後端啟動時會 benchmark 三個候選：
-  - `cpu`
   - 加速器單裝置：Windows `gpu` / macOS `mps`
   - `semantic-auto-*`：只把 Fish semantic transformer 交給 `accelerate.load_checkpoint_and_dispatch(..., device_map="auto")`，decoder 仍留在單一裝置
+  - `cpu`
+- benchmark 順序會優先試加速器，再試 `semantic-auto-*`，最後才試 `cpu`，避免在 Windows 先卡住很慢的 CPU 路線。
+- 若在 Windows/macOS 明確指定 `gpu` 或 `mps`，但 TTS preload 因 OOM 失敗，後端會自動退回 `auto benchmark` 路線，而不是直接把程式炸掉。
 - 啟動 benchmark 的優先序是：
   - 1. 使用者在 UI 明確選的 device
   - 2. `auto` benchmark 選出的最快 device

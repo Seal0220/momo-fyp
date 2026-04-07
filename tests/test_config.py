@@ -3,6 +3,7 @@ import platform
 from backend.config import build_field_catalog, validate_runtime_config
 from backend.types import RuntimeConfig
 from backend.llm.ollama_client import OllamaClient
+from backend.tts import semantic_runtime
 
 
 def test_default_ollama_timeout_is_600():
@@ -36,3 +37,12 @@ def test_ollama_client_cpu_mode_sets_num_gpu_zero():
 def test_ollama_client_auto_mode_leaves_num_gpu_unset():
     client = OllamaClient("http://127.0.0.1:11434", 30, "auto")
     assert "num_gpu" not in client._ollama_options({})
+
+
+def test_benchmark_plans_prioritize_accelerator_before_cpu(monkeypatch):
+    monkeypatch.setattr(semantic_runtime, "resolve_accelerator_mode", lambda: "gpu")
+    monkeypatch.setattr(semantic_runtime, "accelerate_available", lambda: True)
+
+    plans = semantic_runtime.benchmark_plans_for_current_host()
+
+    assert [plan.name for plan in plans] == ["gpu", "semantic-auto-gpu", "cpu"]

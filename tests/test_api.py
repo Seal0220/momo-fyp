@@ -387,6 +387,80 @@ def test_prepare_runtime_models_does_not_crash_on_tts_preload_failure(monkeypatc
         brain.state.event_log = original_event_log
 
 
+def test_prepare_runtime_models_recovers_from_tts_oom_via_benchmark(monkeypatch):
+    original_vision = brain.vision
+    original_tts = brain.tts
+    original_config = brain.config.model_copy(deep=True)
+    original_event_log = list(brain.state.event_log)
+
+    class OomTTS:
+        loaded = False
+        device = "cuda:0"
+        device_backend = "gpu"
+        semantic_dispatch_mode = "single"
+
+        def __init__(self, *args, **kwargs):
+            self.device_mode = kwargs.get("device_mode", "gpu")
+
+        def preload(self) -> None:
+            raise RuntimeError("CUDA out of memory")
+
+    class RecoveredTTS:
+        loaded = False
+        device = "cpu"
+        device_backend = "cpu"
+        semantic_dispatch_mode = "single"
+
+        def preload(self) -> None:
+            self.loaded = True
+
+    class DummyVision:
+        def __init__(self, config):
+            self.config = config
+
+    class FakeSelection:
+        def __init__(self):
+            self.tts = RecoveredTTS()
+            self.result = type(
+                "Result",
+                (),
+                {
+                    "name": "cpu",
+                    "elapsed_ms": 123,
+                    "device_mode": "cpu",
+                    "ram_mb": 10.0,
+                    "vram_mb": 0.0,
+                },
+            )()
+            self.results = [
+                type("Result", (), {"name": "cpu", "ok": True, "elapsed_ms": 123, "semantic_dispatch_mode": "single", "detail": ""})()
+            ]
+
+    brain.config.tts_device_mode = "gpu"
+    monkeypatch.setattr("backend.app.ensure_runtime_models", lambda config: [])
+    monkeypatch.setattr("backend.app.should_skip_tts_benchmark", lambda: False)
+    monkeypatch.setattr("backend.app.FishCloneTTS", OomTTS)
+    monkeypatch.setattr("backend.app.VisionRuntime", DummyVision)
+    monkeypatch.setattr(
+        OomTTS,
+        "benchmark_auto_profiles",
+        classmethod(lambda cls, *args, **kwargs: FakeSelection()),
+        raising=False,
+    )
+
+    try:
+        brain._prepare_runtime_models()
+        assert brain.tts.loaded is True
+        assert brain.tts_runtime.selection_source == "benchmark"
+        assert brain.tts_runtime.requested_mode == "gpu"
+        assert any("recovered from OOM via benchmark fallback" in item for item in brain.state.event_log)
+    finally:
+        brain.vision = original_vision
+        brain.tts = original_tts
+        brain.config = original_config
+        brain.state.event_log = original_event_log
+
+
 def test_select_tts_runtime_uses_benchmark_when_auto(monkeypatch):
     original_tts = brain.tts
     original_config = brain.config.model_copy(deep=True)

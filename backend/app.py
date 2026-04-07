@@ -151,16 +151,10 @@ class Brain:
         ensure_runtime_models(self.config)
         self.tts = self._select_tts_runtime(selection_source="default")
         try:
-            if not self.tts.loaded:
-                tts_device = getattr(self.tts, "device", None)
-                before = capture_process_footprint(tts_device)
-                self.tts.preload()
-                after = capture_process_footprint(tts_device)
-                ram_mb, vram_mb = diff_process_footprint(before, after)
-                self.tts_runtime.ram_mb = ram_mb
-                self.tts_runtime.vram_mb = vram_mb
+            self._preload_tts_runtime()
         except Exception as exc:
-            self.state.event_log = [f"TTS preload failed: {exc}", *self.state.event_log][:20]
+            if not self._recover_tts_from_oom(exc):
+                self.state.event_log = [f"TTS preload failed: {exc}", *self.state.event_log][:20]
         self.vision = VisionRuntime(self.config)
         person_device = getattr(getattr(self.vision, "detector", None), "device", None)
         pose_device = getattr(getattr(self.vision, "pose", None), "device", None)
@@ -221,6 +215,53 @@ class Brain:
             semantic_dispatch_mode=getattr(tts, "semantic_dispatch_mode", None),
         )
         return tts
+
+    def _preload_tts_runtime(self) -> None:
+        if self.tts.loaded:
+            return
+        tts_device = getattr(self.tts, "device", None)
+        before = capture_process_footprint(tts_device)
+        self.tts.preload()
+        after = capture_process_footprint(tts_device)
+        ram_mb, vram_mb = diff_process_footprint(before, after)
+        self.tts_runtime.ram_mb = ram_mb
+        self.tts_runtime.vram_mb = vram_mb
+
+    def _recover_tts_from_oom(self, exc: Exception) -> bool:
+        current_mode = (self.config.tts_device_mode or "").strip().lower()
+        if current_mode not in {"gpu", "mps"}:
+            return False
+        if should_skip_tts_benchmark() or not self._looks_like_memory_pressure(exc):
+            return False
+
+        requested_mode = current_mode
+        self.state.event_log = [f"TTS hit OOM on {requested_mode}; retrying with auto benchmark.", *self.state.event_log][:20]
+        self.config.tts_device_mode = "auto"
+        try:
+            self.tts = self._select_tts_runtime(selection_source="benchmark")
+            self._preload_tts_runtime()
+            self.tts_runtime.requested_mode = requested_mode
+            self.state.event_log = [
+                f"TTS recovered from OOM via benchmark fallback: {self.tts_runtime.effective_device or self.tts_runtime.backend}.",
+                *self.state.event_log,
+            ][:20]
+            return True
+        except Exception as fallback_exc:
+            self.state.event_log = [f"TTS auto fallback failed after OOM: {fallback_exc}", *self.state.event_log][:20]
+            return False
+
+    def _looks_like_memory_pressure(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return any(
+            token in message
+            for token in (
+                "out of memory",
+                "cuda out of memory",
+                "mps backend out of memory",
+                "not enough memory",
+                "cuda error: out of memory",
+            )
+        )
 
     def _select_tts_runtime(self, *, selection_source: str) -> FishCloneTTS:
         if self.config.tts_device_mode != "auto" or should_skip_tts_benchmark():
