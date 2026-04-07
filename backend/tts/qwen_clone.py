@@ -26,9 +26,11 @@ import soundfile as sf
 from backend.device_utils import backend_label_for_device, get_tts_device
 from backend.runtime_shutdown import shutdown_requested
 from backend.tts.model_profiles import resolve_tts_model_profile
+from backend.tts.qwen_runtime import QwenVoiceCloneTTS
 from backend.tts.semantic_runtime import (
     SemanticBenchmarkResult,
     benchmark_plans_for_current_host,
+    cleanup_torch_memory,
     make_semantic_queue,
 )
 
@@ -123,15 +125,68 @@ class FishCloneTTS:
         self._engine = None
         self._lock = threading.Lock()
         self.model_profile = resolve_tts_model_profile(model_path)
+        self._delegate = None
         self.available = Path(model_path).exists() and (
             not clone_voice_enabled or (Path(ref_audio_path).exists() and Path(ref_text_path).exists())
         )
         self.device = get_tts_device(device_mode)
         self.device_backend = backend_label_for_device(self.device)
+        if self.model_profile.key.startswith("qwen3-tts"):
+            self._delegate = QwenVoiceCloneTTS(
+                model_path,
+                ref_audio_path,
+                ref_text_path,
+                clone_voice_enabled=clone_voice_enabled,
+                device_mode=device_mode,
+            )
+            self.device = self._delegate.device
+            self.device_backend = self._delegate.device_backend
+            self.available = self._delegate.available
+
+    def set_reference_paths(self, ref_audio_path: str, ref_text_path: str) -> None:
+        self.ref_audio_path = ref_audio_path
+        self.ref_text_path = ref_text_path
+        if self._delegate is not None:
+            self._delegate.set_reference_paths(ref_audio_path, ref_text_path)
+            self.available = self._delegate.available
+            return
+        self.available = Path(self.model_path).exists() and (
+            not self.clone_voice_enabled or (Path(ref_audio_path).exists() and Path(ref_text_path).exists())
+        )
 
     def preload(self) -> None:
+        if self._delegate is not None:
+            self._delegate.preload()
+            self.loaded = self._delegate.loaded
+            return
         with self._lock:
             self._ensure_model()
+
+    def unload(self) -> None:
+        with self._lock:
+            if self._delegate is not None:
+                self._delegate.unload()
+                self.loaded = False
+                return
+
+            engine = self._engine
+            self._engine = None
+            self._model_manager = None
+            self.loaded = False
+            if engine is not None:
+                queue = getattr(engine, "llama_queue", None)
+                if queue is not None:
+                    try:
+                        queue.put_nowait(None)
+                    except Exception:
+                        pass
+                decoder_model = getattr(engine, "decoder_model", None)
+                if decoder_model is not None and hasattr(decoder_model, "to"):
+                    try:
+                        decoder_model.to("cpu")
+                    except Exception:
+                        pass
+            cleanup_torch_memory()
 
     def _ensure_model(self) -> None:
         if self._engine is not None:
@@ -192,6 +247,10 @@ class FishCloneTTS:
         self.loaded = True
 
     def synthesize(self, text: str, output_path: str, *, request_overrides: dict | None = None) -> str:
+        if self._delegate is not None:
+            result = self._delegate.synthesize(text, output_path, request_overrides=request_overrides)
+            self.loaded = self._delegate.loaded
+            return result
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
         with self._lock:
@@ -214,12 +273,33 @@ class FishCloneTTS:
         clone_voice_enabled: bool,
         sample_text: str = "測試。",
     ) -> TTSAutoBenchmarkSelection | None:
+        profile = resolve_tts_model_profile(model_path)
+        if not profile.supports_startup_benchmark:
+            tts = cls(
+                model_path,
+                ref_audio_path,
+                ref_text_path,
+                clone_voice_enabled=clone_voice_enabled,
+                device_mode="auto",
+            )
+            result = SemanticBenchmarkResult(
+                name=profile.key,
+                device_mode="auto",
+                semantic_dispatch_mode="single",
+                elapsed_ms=0,
+                ok=True,
+            )
+            return TTSAutoBenchmarkSelection(tts=tts, result=result, results=[result])
         plans = benchmark_plans_for_current_host()
         if not plans:
             return None
         results: list[SemanticBenchmarkResult] = []
         best_result: SemanticBenchmarkResult | None = None
         for plan in plans:
+            print(
+                f"[startup] tts benchmark running candidate={plan.name} device={plan.device_mode} semantic={plan.semantic_dispatch_mode}",
+                flush=True,
+            )
             result = _run_benchmark_candidate_subprocess(
                 plan=plan,
                 model_path=model_path,
@@ -227,6 +307,12 @@ class FishCloneTTS:
                 ref_text_path=ref_text_path,
                 clone_voice_enabled=clone_voice_enabled,
                 sample_text=sample_text,
+            )
+            detail = f" detail={result.detail[:200]}" if result.detail else ""
+            print(
+                f"[startup] tts benchmark candidate={result.name} status={'ok' if result.ok else 'error'} "
+                f"elapsed_ms={result.elapsed_ms} semantic={result.semantic_dispatch_mode}{detail}",
+                flush=True,
             )
             if result.ok and (best_result is None or result.elapsed_ms < best_result.elapsed_ms):
                 best_result = result
@@ -244,10 +330,14 @@ class FishCloneTTS:
         return TTSAutoBenchmarkSelection(tts=best_tts, result=best_result, results=results)
 
     def format_emotion_text(self, text: str, emotion: str) -> str:
+        if self._delegate is not None:
+            return self._delegate.format_emotion_text(text, emotion)
         return self.model_profile.format_emotion_text(text, emotion)
 
     @property
     def emotion_tags(self) -> tuple[str, ...]:
+        if self._delegate is not None:
+            return self._delegate.emotion_tags
         return self.model_profile.emotion_tags
 
     def _build_request(self, text: str, *, request_overrides: dict | None = None):

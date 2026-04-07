@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import contextlib
 import os
+import random
 import sys
 import time
 from collections import deque
@@ -34,10 +35,27 @@ from backend.storage.csv_logger import append_audience_snapshot
 from backend.telemetry.system_stats import capture_process_footprint, diff_process_footprint, get_system_stats
 from backend.tts.model_profiles import DEFAULT_TTS_MODEL_PROFILE, resolve_tts_model_profile
 from backend.tts.qwen_clone import BenchmarkShutdownRequested, FishCloneTTS, TTSAutoBenchmarkSelection
+from backend.tts.reference_selection import (
+    ReferencePair,
+    build_fixed_reference_pair,
+    choose_random_emotional_reference_pair,
+    emotional_reference_pair_map,
+    load_emotional_reference_pairs,
+)
 from backend.types import ConfigUpdateResponse, PipelineStage, RuntimeComponentStats, RuntimeConfig, SystemMode
 from backend.vision.runtime import VisionRuntime
 
 DEFAULT_TTS_EMOTION = "confident"
+REFERENCE_PAIR_TAG_TO_NAME = {
+    "感激愧疚": "感激與愧疚",
+    "刻薄質問": "刻薄的質問與探詢",
+    "冷靜專業": "冷靜且專業",
+    "激動不信": "情緒激動且不可置信",
+    "震驚崩潰": "震驚與崩潰",
+    "懷疑嚴厲": "懷疑且嚴厲",
+    "悲慟自責絕望": "極度的悲慟和自責與絕望",
+}
+REFERENCE_PAIR_NAME_TO_TAG = {value: key for key, value in REFERENCE_PAIR_TAG_TO_NAME.items()}
 
 
 class Brain:
@@ -80,6 +98,8 @@ class Brain:
         self.cooldown_until = 0.0
         self.generation_lock = asyncio.Lock()
         self.background_tasks: list[asyncio.Task] = []
+        self._random = random.Random()
+        self._last_tts_reference_pair_key: str | None = None
 
     async def start(self) -> None:
         clear_shutdown_request()
@@ -102,7 +122,7 @@ class Brain:
 
     def _prepare_runtime_models(self) -> None:
         ensure_runtime_models(self.config)
-        self.tts = self._select_tts_runtime(selection_source="default")
+        self._replace_tts_runtime(self._select_tts_runtime(selection_source="default"))
         try:
             self._preload_tts_runtime()
         except Exception as exc:
@@ -130,6 +150,7 @@ class Brain:
         *,
         selection_source: str,
     ) -> FishCloneTTS:
+        startup_reference = self._startup_tts_reference_pair()
         if selection is not None:
             requested_mode = self.config.tts_device_mode
             selected_mode = getattr(selection.result, "device_mode", getattr(selection.tts, "device_mode", self.config.tts_device_mode))
@@ -155,8 +176,8 @@ class Brain:
         self.tts_benchmark_results = []
         tts = FishCloneTTS(
             self.config.tts_model_path,
-            self.config.tts_ref_audio_path,
-            self.config.tts_ref_text_path,
+            startup_reference.audio_path,
+            startup_reference.text_path,
             clone_voice_enabled=self.config.tts_clone_voice_enabled,
             device_mode=self.config.tts_device_mode,
         )
@@ -180,6 +201,18 @@ class Brain:
         self.tts_runtime.ram_mb = ram_mb
         self.tts_runtime.vram_mb = vram_mb
 
+    def _replace_tts_runtime(self, next_tts: FishCloneTTS) -> None:
+        previous = getattr(self, "tts", None)
+        self.tts = next_tts
+        if previous is None or previous is next_tts:
+            return
+        unload = getattr(previous, "unload", None)
+        if callable(unload):
+            try:
+                unload()
+            except Exception as exc:
+                self.state.event_log = [f"TTS unload warning: {exc}", *self.state.event_log][:20]
+
     def _recover_tts_from_oom(self, exc: Exception) -> bool:
         current_mode = (self.config.tts_device_mode or "").strip().lower()
         if current_mode not in {"gpu", "mps"}:
@@ -191,7 +224,7 @@ class Brain:
         self.state.event_log = [f"TTS hit OOM on {requested_mode}; retrying with auto benchmark.", *self.state.event_log][:20]
         self.config.tts_device_mode = "auto"
         try:
-            self.tts = self._select_tts_runtime(selection_source="benchmark")
+            self._replace_tts_runtime(self._select_tts_runtime(selection_source="benchmark"))
             self._preload_tts_runtime()
             self.tts_runtime.requested_mode = requested_mode
             self.state.event_log = [
@@ -217,13 +250,15 @@ class Brain:
         )
 
     def _select_tts_runtime(self, *, selection_source: str) -> FishCloneTTS:
-        if self.config.tts_device_mode != "auto" or should_skip_tts_benchmark():
+        profile = resolve_tts_model_profile(self.config.tts_model_path)
+        if self.config.tts_device_mode != "auto" or should_skip_tts_benchmark() or not profile.supports_startup_benchmark:
             return self._build_tts_runtime(selection_source=selection_source)
 
+        startup_reference = self._startup_tts_reference_pair()
         selection = FishCloneTTS.benchmark_auto_profiles(
             self.config.tts_model_path,
-            self.config.tts_ref_audio_path,
-            self.config.tts_ref_text_path,
+            startup_reference.audio_path,
+            startup_reference.text_path,
             clone_voice_enabled=self.config.tts_clone_voice_enabled,
         )
         if selection is None:
@@ -731,7 +766,10 @@ class Brain:
     async def _speak_line(self, text: str) -> None:
         self.state.set_pipeline_stage(PipelineStage.TTS)
         started = time.monotonic()
-        if self.config.tts_emotion_enabled:
+        if self.config.tts_clone_voice_enabled:
+            reference_pair = await self._select_tts_reference_pair(text)
+            self._apply_tts_reference_pair(reference_pair)
+        if self.config.tts_emotion_enabled and self._current_tts_model_profile().supports_structured_emotion:
             emotion_raw, emotion = await self._classify_tts_emotion(text)
             tts_text = self._apply_tts_emotion(text, emotion)
         else:
@@ -825,6 +863,146 @@ class Brain:
     def _current_tts_model_profile(self):
         return getattr(self.tts, "model_profile", None) or resolve_tts_model_profile(self.config.tts_model_path) or DEFAULT_TTS_MODEL_PROFILE
 
+    def _startup_tts_reference_pair(self) -> ReferencePair:
+        if not self.config.tts_clone_voice_enabled or self.config.tts_reference_mode == "fixed":
+            return build_fixed_reference_pair(self.config.tts_ref_audio_path, self.config.tts_ref_text_path)
+        return load_emotional_reference_pairs()[0]
+
+    async def _select_tts_reference_pair(self, text: str) -> ReferencePair:
+        mode = (self.config.tts_reference_mode or "fixed").strip().lower()
+        if mode == "fixed":
+            self.state.tts_reference_raw = None
+            return build_fixed_reference_pair(self.config.tts_ref_audio_path, self.config.tts_ref_text_path)
+        if mode == "random":
+            self.state.tts_reference_raw = None
+            return choose_random_emotional_reference_pair(self._random)
+        raw, pair = await self._classify_tts_reference_pair(text)
+        previous_pair = self._last_tts_reference_pair_key
+        if previous_pair and pair.key == previous_pair:
+            retry_raw, retry_pair = await self._classify_tts_reference_pair(text, excluded={previous_pair})
+            if retry_pair.key != previous_pair:
+                raw, pair = retry_raw, retry_pair
+            else:
+                pair_map = emotional_reference_pair_map()
+                pair = self._fallback_tts_reference_pair(text, pair_map, excluded={previous_pair})
+        self.state.tts_reference_raw = raw
+        return pair
+
+    async def _classify_tts_reference_pair(
+        self,
+        text: str,
+        *,
+        excluded: set[str] | None = None,
+    ) -> tuple[str, ReferencePair]:
+        pair_map = emotional_reference_pair_map()
+        banned = excluded or set()
+        choices = [tag for tag, pair_name in REFERENCE_PAIR_TAG_TO_NAME.items() if pair_name in pair_map and pair_name not in banned]
+        if not choices:
+            fallback_pair = self._fallback_tts_reference_pair(text, pair_map, excluded=banned)
+            return REFERENCE_PAIR_NAME_TO_TAG.get(fallback_pair.key, fallback_pair.key), fallback_pair
+        client = OllamaClient(self.config.ollama_base_url, min(self.config.ollama_timeout_sec, 15), self.config.ollama_device_mode)
+        disallow_text = ""
+        if banned:
+            disallow_tags = [REFERENCE_PAIR_NAME_TO_TAG.get(name, name) for name in banned]
+            disallow_text = f"上一句剛用過：{', '.join(disallow_tags)}。這次不可輸出這些標籤。\n"
+        prompt = (
+            "你是 reference voice / transcript 情緒分類器。"
+            f"你必須只從這個清單挑一個最適合該句子情緒與語氣的簡短情緒標籤，直接輸出標籤本身，不要解釋：{', '.join(choices)}。\n"
+            f"{disallow_text}"
+            "不可輸出清單外內容，不可加標點，不可加前後綴。\n"
+            f"句子：{text}"
+        )
+        try:
+            raw = await asyncio.wait_for(
+                self._stream_text(
+                    client,
+                    "只輸出一個情緒標籤。",
+                    prompt,
+                    {
+                        "num_predict": 24,
+                        "temperature": 0,
+                        "top_p": 0.2,
+                        "repeat_penalty": 1.0,
+                        "stop": ["\n", "。", ","],
+                    },
+                ),
+                timeout=min(self.config.ollama_timeout_sec, 15),
+            )
+        except Exception:
+            fallback_pair = self._fallback_tts_reference_pair(text, pair_map, excluded=banned)
+            return REFERENCE_PAIR_NAME_TO_TAG.get(fallback_pair.key, fallback_pair.key), fallback_pair
+        normalized_tag = self._normalize_tts_reference_tag(raw)
+        if normalized_tag is None:
+            fallback_pair = self._fallback_tts_reference_pair(text, pair_map, excluded=banned)
+            return self._clean_tts_reference_label(raw), fallback_pair
+        pair_name = REFERENCE_PAIR_TAG_TO_NAME[normalized_tag]
+        pair = pair_map.get(pair_name)
+        if pair is None:
+            fallback_pair = self._fallback_tts_reference_pair(text, pair_map, excluded=banned)
+            return normalized_tag, fallback_pair
+        return normalized_tag, pair
+
+    def _clean_tts_reference_label(self, raw: str) -> str:
+        return "".join(raw.strip().strip("()[]{}<>\"'`.,，。!！？").split())
+
+    def _normalize_tts_reference_tag(self, raw: str) -> str | None:
+        cleaned = self._clean_tts_reference_label(raw)
+        if not cleaned:
+            return None
+        if cleaned in REFERENCE_PAIR_TAG_TO_NAME:
+            return cleaned
+        for pair_name, tag in REFERENCE_PAIR_NAME_TO_TAG.items():
+            if self._clean_tts_reference_label(pair_name) == cleaned:
+                return tag
+        aliases = {
+            "感激與愧疚": "感激愧疚",
+            "刻薄的質問與探詢": "刻薄質問",
+            "冷靜且專業": "冷靜專業",
+            "情緒激動且不可置信": "激動不信",
+            "震驚與崩潰": "震驚崩潰",
+            "懷疑且嚴厲": "懷疑嚴厲",
+            "極度的悲慟和自責與絕望": "悲慟自責絕望",
+        }
+        return aliases.get(cleaned)
+
+    def _fallback_tts_reference_pair(
+        self,
+        text: str,
+        pair_map: dict[str, ReferencePair],
+        *,
+        excluded: set[str] | None = None,
+    ) -> ReferencePair:
+        banned = excluded or set()
+        heuristics = [
+            (("謝", "感激", "抱歉", "愧疚"), "感激與愧疚"),
+            (("質問", "逼問", "探詢", "你到底"), "刻薄的質問與探詢"),
+            (("冷靜", "分析", "專業", "流程"), "冷靜且專業"),
+            (("不可置信", "怎麼可能", "太誇張", "激動"), "情緒激動且不可置信"),
+            (("震驚", "崩潰", "完了", "不可能"), "震驚與崩潰"),
+            (("懷疑", "嚴厲", "老實說", "最好"), "懷疑且嚴厲"),
+            (("悲", "自責", "絕望", "痛苦"), "極度的悲慟和自責與絕望"),
+        ]
+        for tokens, key in heuristics:
+            if any(token in text for token in tokens) and key in pair_map and key not in banned:
+                return pair_map[key]
+        if "冷靜且專業" in pair_map and "冷靜且專業" not in banned:
+            return pair_map["冷靜且專業"]
+        for pair in pair_map.values():
+            if pair.key not in banned:
+                return pair
+        return next(iter(pair_map.values()))
+
+    def _apply_tts_reference_pair(self, pair: ReferencePair) -> None:
+        if hasattr(self.tts, "set_reference_paths"):
+            self.tts.set_reference_paths(pair.audio_path, pair.text_path)
+        else:
+            self.tts.ref_audio_path = pair.audio_path
+            self.tts.ref_text_path = pair.text_path
+        self._last_tts_reference_pair_key = pair.key
+        self.state.tts_reference_pair = pair.key
+        self.state.tts_reference_audio_path = pair.audio_path
+        self.state.tts_reference_text_path = pair.text_path
+
     def _event_summary(self) -> str:
         actions = self.state.audience.actions
         labels = {
@@ -901,24 +1079,51 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
         except Exception as exc:
             checks.append({"component": "llm", "status": "error", "message": f"Ollama check failed: {exc}"})
 
-    if changed & {"tts_model_path", "tts_device_mode", "tts_emotion_enabled", "tts_clone_voice_enabled", "tts_ref_audio_path", "tts_ref_text_path", "tts_timeout_sec"}:
+    if changed & {"tts_model_path", "tts_device_mode", "tts_emotion_enabled", "tts_clone_voice_enabled", "tts_reference_mode", "tts_ref_audio_path", "tts_ref_text_path", "tts_timeout_sec"}:
         errors: list[str] = []
-        model_path = brain.tts.model_path if hasattr(brain.tts.model_path, "exists") else Path(brain.tts.model_path)
-        ref_audio_path = brain.tts.ref_audio_path if hasattr(brain.tts.ref_audio_path, "exists") else Path(brain.tts.ref_audio_path)
-        ref_text_path = brain.tts.ref_text_path if hasattr(brain.tts.ref_text_path, "exists") else Path(brain.tts.ref_text_path)
+        model_path = Path(config.tts_model_path)
         if not model_path.exists():
             errors.append(f"missing model path: {model_path}")
         if config.tts_clone_voice_enabled:
-            if not ref_audio_path.exists():
-                errors.append(f"missing ref audio: {ref_audio_path}")
-            if not ref_text_path.exists():
-                errors.append(f"missing ref transcript: {ref_text_path}")
+            if config.tts_reference_mode == "fixed":
+                ref_pair = build_fixed_reference_pair(config.tts_ref_audio_path, config.tts_ref_text_path)
+                if not Path(ref_pair.audio_path).exists():
+                    errors.append(f"missing ref audio: {ref_pair.audio_path}")
+                if not Path(ref_pair.text_path).exists():
+                    errors.append(f"missing ref transcript: {ref_pair.text_path}")
+            else:
+                try:
+                    pair_count = len(load_emotional_reference_pairs())
+                except Exception as exc:
+                    errors.append(str(exc))
+                else:
+                    mode = "clone voice" if config.tts_clone_voice_enabled else "normal TTS"
+                    emotion_mode = "emotion on" if config.tts_emotion_enabled else "emotion off"
+                    checks.append(
+                        {
+                            "component": "tts",
+                            "status": "ok",
+                            "message": (
+                                f"TTS ready in {mode}, {emotion_mode}. Emotional reference library ready with {pair_count} pairs. "
+                                f"Reference mode is {config.tts_reference_mode}. Timeout set to {config.tts_timeout_sec * 1000} ms."
+                            ),
+                        }
+                    )
         if errors:
             checks.append({"component": "tts", "status": "error", "message": "; ".join(errors)})
-        else:
+        elif config.tts_reference_mode == "fixed" or not config.tts_clone_voice_enabled:
             mode = "clone voice" if config.tts_clone_voice_enabled else "normal TTS"
             emotion_mode = "emotion on" if config.tts_emotion_enabled else "emotion off"
-            checks.append({"component": "tts", "status": "ok", "message": f"TTS ready in {mode}, {emotion_mode}, device {config.tts_device_mode}. Timeout set to {config.tts_timeout_sec * 1000} ms."})
+            checks.append(
+                {
+                    "component": "tts",
+                    "status": "ok",
+                    "message": (
+                        f"TTS ready in {mode}, {emotion_mode}, ref mode {config.tts_reference_mode}, "
+                        f"device {config.tts_device_mode}. Timeout set to {config.tts_timeout_sec * 1000} ms."
+                    ),
+                }
+            )
 
     if changed & {"audio_output_device", "tts_output_volume"}:
         available_ids = {item["id"] for item in AudioPlayer.list_output_devices()}
@@ -1068,7 +1273,7 @@ async def update_config(payload: dict):
             source = "user" if requested_mode != RuntimeConfig().tts_device_mode else "default"
         else:
             source = brain.tts_runtime.selection_source or "default"
-        brain.tts = brain._select_tts_runtime(selection_source=source)
+        brain._replace_tts_runtime(brain._select_tts_runtime(selection_source=source))
     brain.vision.reconfigure(brain.config)
     if changed_keys & {"yolo_model_path", "yolo_pose_model_path", "yolo_device_mode"}:
         try:

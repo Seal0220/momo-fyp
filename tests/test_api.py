@@ -10,8 +10,16 @@ from fastapi.testclient import TestClient
 import backend.app as app_module
 import backend.tts.qwen_clone as qwen_module
 from backend.app import app, brain
-from backend.tts.model_profiles import FISH_AUDIO_S1_MINI_PROFILE, FISH_SPEECH_V1_5_PROFILE, resolve_tts_model_profile
+from backend.tts.model_profiles import (
+    FISH_AUDIO_S1_MINI_PROFILE,
+    FISH_SPEECH_V1_5_PROFILE,
+    QWEN3_TTS_0_6B_BASE_PROFILE,
+    QWEN3_TTS_1_7B_BASE_PROFILE,
+    resolve_tts_model_profile,
+)
 from backend.tts.qwen_clone import BenchmarkShutdownRequested, QwenCloneTTS
+from backend.tts.qwen_runtime import QwenVoiceCloneTTS
+from backend.tts.reference_selection import ReferencePair
 from backend.tts.semantic_runtime import SemanticBenchmarkResult, SemanticRuntimePlan
 from backend.types import AudienceFeatures, PipelineStage, ServoTelemetry
 from backend.vision.runtime import VisionState
@@ -30,6 +38,10 @@ def test_status_endpoint_returns_pipeline_and_stats():
     assert "tts_emotion_applied" in payload
     assert "tts_emotion_used" in payload
     assert "tts_input_text" in payload
+    assert "tts_reference_raw" in payload
+    assert "tts_reference_pair" in payload
+    assert "tts_reference_audio_path" in payload
+    assert "tts_reference_text_path" in payload
     assert "tts_runtime" in payload
     assert "ollama_runtime" in payload
     assert "yolo_person_runtime" in payload
@@ -192,6 +204,49 @@ def test_update_config_tts_path_no_server_error():
     payload = response.json()
     assert payload["validation_errors"] == []
     assert any(item["component"] == "tts" for item in payload["apply_checks"])
+
+
+def test_update_config_unloads_previous_tts_runtime(monkeypatch):
+    original_tts = brain.tts
+    original_config = brain.config.model_copy(deep=True)
+    original_select = brain._select_tts_runtime
+    original_reconfigure = brain.vision.reconfigure
+
+    unloaded: list[str] = []
+
+    class FakeTTS:
+        def __init__(self, model_path: str) -> None:
+            self.model_path = model_path
+            self.ref_audio_path = "resource/voice/ref-voice3.wav"
+            self.ref_text_path = "resource/voice/transcript3.txt"
+            self.loaded = False
+            self.device = "cpu"
+            self.device_backend = "cpu"
+            self.semantic_dispatch_mode = "single"
+            self.model_profile = resolve_tts_model_profile(model_path)
+
+        def unload(self) -> None:
+            unloaded.append(self.model_path)
+
+    old_tts = FakeTTS("model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-0.6B-Base")
+    new_tts = FakeTTS("model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-1.7B-Base")
+    brain.tts = old_tts
+    brain.config = original_config.model_copy(update={"tts_model_path": old_tts.model_path})
+
+    monkeypatch.setattr(app_module, "should_prepare_models", lambda: False)
+    monkeypatch.setattr(brain, "_select_tts_runtime", lambda selection_source: new_tts)
+    monkeypatch.setattr(brain.vision, "reconfigure", lambda *_: None)
+
+    try:
+        response = client.post("/api/config", json={"tts_model_path": new_tts.model_path})
+        assert response.status_code == 200
+        assert unloaded == [old_tts.model_path]
+        assert brain.tts is new_tts
+    finally:
+        brain.tts = original_tts
+        brain.config = original_config
+        brain._select_tts_runtime = original_select
+        brain.vision.reconfigure = original_reconfigure
 
 
 def test_update_config_can_disable_clone_voice():
@@ -826,6 +881,31 @@ def test_load_reference_text_keeps_short_ascii_transcript(tmp_path):
     assert tts._load_reference_text() is not None
 
 
+def test_qwen_voice_clone_tts_set_reference_paths_clears_cached_prompt():
+    tts = QwenVoiceCloneTTS("model", "voice.wav", "transcript.txt")
+    tts._clone_prompt = object()
+
+    tts.set_reference_paths("next.wav", "next.txt")
+
+    assert tts.ref_audio_path == "next.wav"
+    assert tts.ref_text_path == "next.txt"
+    assert tts._clone_prompt is None
+
+
+def test_fish_clone_tts_set_reference_paths_updates_runtime_values():
+    tts = QwenCloneTTS(
+        "model/huggingface/hf_snapshots/fishaudio__s1-mini",
+        "voice.wav",
+        "transcript.txt",
+        clone_voice_enabled=False,
+    )
+
+    tts.set_reference_paths("next.wav", "next.txt")
+
+    assert tts.ref_audio_path == "next.wav"
+    assert tts.ref_text_path == "next.txt"
+
+
 def test_apply_tts_emotion_wraps_text_with_supported_tag():
     tagged = brain._apply_tts_emotion("你好啊。", "excited")
     assert tagged == "(excited)你好啊。"
@@ -855,6 +935,132 @@ def test_fallback_tts_emotion_returns_supported_emotion():
     assert brain._fallback_tts_emotion("我真的很孤獨。") == "sad"
 
 
+def test_select_tts_reference_pair_fixed_uses_configured_paths():
+    original_config = brain.config.model_copy(deep=True)
+
+    brain.config.tts_clone_voice_enabled = True
+    brain.config.tts_reference_mode = "fixed"
+    brain.config.tts_ref_audio_path = "resource/voice/ref-voice3.wav"
+    brain.config.tts_ref_text_path = "resource/voice/transcript3.txt"
+
+    try:
+        pair = asyncio.run(brain._select_tts_reference_pair("測試台詞。"))
+        assert pair.audio_path == "resource/voice/ref-voice3.wav"
+        assert pair.text_path == "resource/voice/transcript3.txt"
+    finally:
+        brain.config = original_config
+
+
+def test_select_tts_reference_pair_random_uses_random_library_choice(monkeypatch):
+    original_config = brain.config.model_copy(deep=True)
+    expected = ReferencePair("冷靜且專業", "audio.mp3", "text.txt")
+
+    brain.config.tts_clone_voice_enabled = True
+    brain.config.tts_reference_mode = "random"
+    monkeypatch.setattr("backend.app.choose_random_emotional_reference_pair", lambda *_: expected)
+
+    try:
+        pair = asyncio.run(brain._select_tts_reference_pair("測試台詞。"))
+        assert pair == expected
+    finally:
+        brain.config = original_config
+
+
+def test_classify_tts_reference_pair_uses_ollama_choice():
+    original_config = brain.config.model_copy(deep=True)
+    original_stream = brain._stream_text
+
+    async def fake_stream(*args, **kwargs):
+        return "懷疑嚴厲"
+
+    brain.config.tts_clone_voice_enabled = True
+    brain.config.tts_reference_mode = "ollama_emotion"
+    brain._stream_text = fake_stream
+
+    try:
+        raw, pair = asyncio.run(brain._classify_tts_reference_pair("你最好老實說。"))
+        assert raw == "懷疑嚴厲"
+        assert pair.key == "懷疑且嚴厲"
+        assert pair.audio_path.endswith(".MP3")
+        assert pair.text_path.endswith(".txt")
+    finally:
+        brain.config = original_config
+        brain._stream_text = original_stream
+
+
+def test_select_tts_reference_pair_avoids_consecutive_duplicate_in_ollama_mode():
+    original_config = brain.config.model_copy(deep=True)
+    original_stream = brain._stream_text
+    original_last_pair = brain._last_tts_reference_pair_key
+
+    responses = iter(["悲慟自責絕望", "冷靜專業"])
+
+    async def fake_stream(*args, **kwargs):
+        return next(responses)
+
+    brain.config.tts_clone_voice_enabled = True
+    brain.config.tts_reference_mode = "ollama_emotion"
+    brain._last_tts_reference_pair_key = "極度的悲慟和自責與絕望"
+    brain._stream_text = fake_stream
+
+    try:
+        pair = asyncio.run(brain._select_tts_reference_pair("這句其實很平靜。"))
+        assert pair.key == "冷靜且專業"
+        assert brain.state.tts_reference_raw == "冷靜專業"
+    finally:
+        brain.config = original_config
+        brain._stream_text = original_stream
+        brain._last_tts_reference_pair_key = original_last_pair
+
+
+def test_speak_line_applies_selected_reference_pair_before_synthesis():
+    original_tts = brain.tts
+    original_config = brain.config.model_copy(deep=True)
+    original_select_reference = brain._select_tts_reference_pair
+    original_set_output = brain.audio.set_output_device
+    original_play = brain.audio.play
+
+    captured: dict[str, object] = {}
+
+    class FakeTTS:
+        loaded = True
+        model_profile = QWEN3_TTS_0_6B_BASE_PROFILE
+
+        def set_reference_paths(self, audio_path: str, text_path: str) -> None:
+            captured["ref_audio_path"] = audio_path
+            captured["ref_text_path"] = text_path
+
+        def synthesize(self, text: str, output_path: str) -> str:
+            captured["tts_text"] = text
+            return output_path
+
+    async def fake_select_reference(_: str) -> ReferencePair:
+        return ReferencePair("冷靜且專業", "resource/voice/emotional-ref/冷靜且專業.MP3", "resource/voice/emotional-ref/冷靜且專業.txt")
+
+    brain.tts = FakeTTS()
+    brain.config.tts_clone_voice_enabled = True
+    brain.config.tts_reference_mode = "ollama_emotion"
+    brain.config.tts_emotion_enabled = False
+    brain._select_tts_reference_pair = fake_select_reference
+    brain.audio.set_output_device = lambda *_: None
+    brain.audio.play = lambda wav_path, volume=1.0: wav_path
+
+    try:
+        asyncio.run(brain._speak_line("測試台詞。"))
+        assert captured["ref_audio_path"] == "resource/voice/emotional-ref/冷靜且專業.MP3"
+        assert captured["ref_text_path"] == "resource/voice/emotional-ref/冷靜且專業.txt"
+        assert captured["tts_text"] == "測試台詞。"
+        assert brain.state.tts_reference_pair == "冷靜且專業"
+        assert brain.state.tts_reference_audio_path == "resource/voice/emotional-ref/冷靜且專業.MP3"
+        assert brain.state.tts_reference_text_path == "resource/voice/emotional-ref/冷靜且專業.txt"
+    finally:
+        brain.tts = original_tts
+        brain.config = original_config
+        brain._select_tts_reference_pair = original_select_reference
+        brain.audio.set_output_device = original_set_output
+        brain.audio.play = original_play
+
+
 def test_v1_5_profile_uses_basic_emotion_set_only():
     assert brain._normalize_tts_emotion("disappointed", profile=FISH_SPEECH_V1_5_PROFILE) is None
     assert brain._normalize_tts_emotion("sad", profile=FISH_SPEECH_V1_5_PROFILE) == "sad"
@@ -864,6 +1070,48 @@ def test_v1_5_profile_uses_basic_emotion_set_only():
 def test_resolve_tts_model_profile_by_model_path():
     assert resolve_tts_model_profile("model/huggingface/hf_snapshots/fishaudio__fish-speech-1.5") == FISH_SPEECH_V1_5_PROFILE
     assert resolve_tts_model_profile("model/huggingface/hf_snapshots/fishaudio__s1-mini") == FISH_AUDIO_S1_MINI_PROFILE
+    assert resolve_tts_model_profile("model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-0.6B-Base") == QWEN3_TTS_0_6B_BASE_PROFILE
+    assert resolve_tts_model_profile("model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-1.7B-Base") == QWEN3_TTS_1_7B_BASE_PROFILE
+
+
+def test_speak_line_skips_structured_emotion_for_qwen_profile():
+    original_tts = brain.tts
+    original_set_output = brain.audio.set_output_device
+    original_play = brain.audio.play
+    original_raw = brain.state.tts_emotion_raw
+    original_applied = brain.state.tts_emotion_applied
+    original_used = brain.state.tts_emotion_used
+    original_input_text = brain.state.tts_input_text
+
+    captured: dict[str, object] = {}
+
+    class FakeQwenTTS:
+        loaded = True
+        model_profile = QWEN3_TTS_0_6B_BASE_PROFILE
+
+        def synthesize(self, text: str, output_path: str) -> str:
+            captured["tts_text"] = text
+            return output_path
+
+    brain.tts = FakeQwenTTS()
+    brain.audio.set_output_device = lambda *_: None
+    brain.audio.play = lambda wav_path, volume=1.0: wav_path
+
+    try:
+        asyncio.run(brain._speak_line("測試台詞。"))
+        assert captured["tts_text"] == "測試台詞。"
+        assert brain.state.tts_emotion_raw is None
+        assert brain.state.tts_emotion_applied is None
+        assert brain.state.tts_emotion_used is False
+        assert brain.state.tts_input_text == "測試台詞。"
+    finally:
+        brain.tts = original_tts
+        brain.audio.set_output_device = original_set_output
+        brain.audio.play = original_play
+        brain.state.tts_emotion_raw = original_raw
+        brain.state.tts_emotion_applied = original_applied
+        brain.state.tts_emotion_used = original_used
+        brain.state.tts_input_text = original_input_text
 
 
 def test_polish_waveform_applies_fades_and_recenters() -> None:

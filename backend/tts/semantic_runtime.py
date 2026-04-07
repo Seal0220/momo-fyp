@@ -259,4 +259,10 @@ def _module_device(module: Any) -> torch.device:
 def cleanup_torch_memory() -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    mps = getattr(torch, "mps", None)
+    if mps is not None and hasattr(mps, "empty_cache"):
+        try:
+            mps.empty_cache()
+        except Exception:
+            pass
     gc.collect()

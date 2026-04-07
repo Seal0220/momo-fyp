@@ -99,7 +99,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                   <select value={String(value)} onChange={(e) => updateDraft(setDraft, setHasLocalEdits, draft, field.key, e.target.value)}>
                     {cameras.map((camera) => <option key={camera.device_id} value={camera.device_id}>{camera.device_name}</option>)}
                   </select>
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
                   <small>{field.description}</small>
                 </label>
               );
@@ -112,7 +112,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                     <option value="browser">Browser</option>
                     <option value="backend">Backend OpenCV</option>
                   </select>
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
                   <small>{field.description}</small>
                 </label>
               );
@@ -148,6 +148,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                     })}
                   </select>
                   <FieldMeta
+                    fieldKey={field.key}
                     appliedValue={`${config.camera_width ?? field.value}x${config.camera_height ?? 480}`}
                     pendingValue={`${selectedWidth}x${selectedHeight}`}
                     isDirty={
@@ -176,7 +177,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                       </option>
                     ))}
                   </select>
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
                   <small>Choose camera refresh rate. Lower values reduce CPU and UI lag.</small>
                 </label>
               );
@@ -188,7 +189,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                   <select value={String(value)} onChange={(e) => updateDraft(setDraft, setHasLocalEdits, draft, field.key, e.target.value)}>
                     {models.map((model) => <option key={model} value={model}>{model}</option>)}
                   </select>
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
                   <small>{field.description}</small>
                 </label>
               );
@@ -205,7 +206,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                       </option>
                     ))}
                   </select>
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
                   <small>{field.description}</small>
                 </label>
               );
@@ -219,8 +220,8 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                     checked={Boolean(value)}
                     onChange={(e) => updateDraft(setDraft, setHasLocalEdits, draft, field.key, e.target.checked)}
                   />
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
-                  <small>{field.description} Default: {String(field.default)}</small>
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <small>{field.description} Default: {formatValue(field.key, field.default)}</small>
                 </label>
               );
             }
@@ -231,12 +232,12 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                   <select value={String(value)} onChange={(e) => updateDraft(setDraft, setHasLocalEdits, draft, field.key, e.target.value)}>
                     {field.enum.map((item) => (
                       <option key={item} value={item}>
-                        {item}
+                        {formatOptionLabel(field.key, item)}
                       </option>
                     ))}
                   </select>
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
-                  <small>{field.description} Default: {String(field.default)}</small>
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <small>{field.description} Default: {formatValue(field.key, field.default)}</small>
                 </label>
               );
             }
@@ -258,7 +259,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                       });
                     }}
                   />
-                  <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                  <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
                   <small>{field.description} One path per line.</small>
                 </label>
               );
@@ -270,8 +271,8 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                   value={String(value)}
                   onChange={(e) => updateDraft(setDraft, setHasLocalEdits, draft, field.key, parseInput(field.type, e.target.value))}
                 />
-                <FieldMeta appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
-                <small>{field.description} Default: {String(field.default)}{field.valid_range ? ` | Range: ${field.valid_range}` : ""}</small>
+                <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
+                <small>{field.description} Default: {formatValue(field.key, field.default)}{field.valid_range ? ` | Range: ${field.valid_range}` : ""}</small>
               </label>
             );
           })}
@@ -304,27 +305,48 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
 }
 
 function FieldMeta({
+  fieldKey,
   appliedValue,
   pendingValue,
   isDirty,
 }: {
+  fieldKey: string;
   appliedValue: unknown;
   pendingValue: unknown;
   isDirty: boolean;
 }) {
   return (
     <div className="field-meta">
-      <span className="field-chip applied">Using: {formatValue(appliedValue)}</span>
-      {isDirty ? <span className="field-chip pending">Pending: {formatValue(pendingValue)}</span> : null}
+      <span className="field-chip applied">Using: {formatValue(fieldKey, appliedValue)}</span>
+      {isDirty ? <span className="field-chip pending">Pending: {formatValue(fieldKey, pendingValue)}</span> : null}
     </div>
   );
 }
 
-function formatValue(value: unknown): string {
+function formatValue(fieldKey: string, value: unknown): string {
   if (Array.isArray(value)) return value.join(" | ");
   if (typeof value === "boolean") return value ? "true" : "false";
   if (value === null || value === undefined || value === "") return "(empty)";
+  if (fieldKey === "tts_model_path") return formatTtsModelLabel(String(value));
   return String(value);
+}
+
+function formatOptionLabel(fieldKey: string, value: string): string {
+  if (fieldKey === "tts_model_path") return formatTtsModelLabel(value);
+  if (fieldKey === "tts_reference_mode") {
+    if (value === "fixed") return "Fixed Pair";
+    if (value === "ollama_emotion") return "Ollama Emotion Pair";
+    if (value === "random") return "Random Emotional Pair";
+  }
+  return value;
+}
+
+function formatTtsModelLabel(value: string): string {
+  if (value.includes("Qwen__Qwen3-TTS-12Hz-0.6B-Base")) return "Qwen3-TTS 0.6B Base";
+  if (value.includes("Qwen__Qwen3-TTS-12Hz-1.7B-Base")) return "Qwen3-TTS 1.7B Base";
+  if (value.includes("fishaudio__fish-speech-1.5")) return "Fish Speech V1.5";
+  if (value.includes("fishaudio__s1-mini")) return "Fish Audio S1 Mini";
+  return value;
 }
 
 function updateDraft(

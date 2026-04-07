@@ -4,13 +4,15 @@ from backend.config import build_field_catalog, validate_runtime_config
 from backend.types import RuntimeConfig
 from backend.llm.ollama_client import OllamaClient
 from backend.tts import semantic_runtime
+from backend.tts.model_profiles import supported_tts_model_paths
 
 
 def test_default_ollama_timeout_is_600():
     config = RuntimeConfig()
     assert config.ollama_timeout_sec == 600
     assert config.ollama_model == "qwen3.5:2b"
-    assert config.tts_model_path == "model/huggingface/hf_snapshots/fishaudio__fish-speech-1.5"
+    assert config.tts_model_path == "model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-0.6B-Base"
+    assert config.tts_reference_mode == "ollama_emotion"
 
 
 def test_invalid_config_detected():
@@ -28,6 +30,22 @@ def test_device_mode_fields_expose_os_specific_enum():
     assert fields["yolo_device_mode"].enum == ["auto", "cpu", accelerator]
     assert fields["tts_device_mode"].enum == ["auto", "cpu", accelerator]
     assert fields["ollama_device_mode"].enum == ["auto", "cpu", accelerator]
+    assert fields["tts_reference_mode"].enum == ["fixed", "ollama_emotion", "random"]
+
+
+def test_tts_model_field_exposes_supported_model_options():
+    config = RuntimeConfig()
+    fields = {field.key: field for field in build_field_catalog(config)}
+
+    assert fields["tts_model_path"].enum == supported_tts_model_paths()
+
+
+def test_invalid_tts_reference_mode_detected():
+    config = RuntimeConfig(tts_reference_mode="bad-mode")
+
+    errors = validate_runtime_config(config)
+
+    assert "tts_reference_mode must be one of ['fixed', 'ollama_emotion', 'random']" in errors
 
 
 def test_ollama_client_cpu_mode_sets_num_gpu_zero():

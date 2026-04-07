@@ -79,6 +79,10 @@ export type StatusSnapshot = {
   tts_emotion_applied?: string | null;
   tts_emotion_used: boolean;
   tts_input_text?: string | null;
+  tts_reference_raw?: string | null;
+  tts_reference_pair?: string | null;
+  tts_reference_audio_path?: string | null;
+  tts_reference_text_path?: string | null;
   current_prompt_system?: string | null;
   current_prompt_user?: string | null;
   last_llm_output?: string | null;

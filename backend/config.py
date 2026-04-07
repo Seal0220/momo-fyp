@@ -5,6 +5,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from backend.tts.model_profiles import supported_tts_model_paths
+from backend.tts.reference_selection import build_fixed_reference_pair, load_emotional_reference_pairs
 from backend.types import ConfigField, RuntimeConfig
 
 
@@ -47,12 +49,17 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str | None]] = {
     "tracking_examples_selected": ("Tracking Examples", "CSV examples used for stage-aligned tracking prompt generation.", None),
     "idle_examples_selected": ("Idle Examples", "CSV examples used for idle prompt generation.", None),
     "history_max_sentences": ("History Size", "History rollover limit. Fixed at 10 for MVP.", "10"),
-    "tts_model_path": ("TTS Model Path", "Local Fish Audio TTS model path. Supports Fish Speech V1.5 and S1 Mini.", None),
+    "tts_model_path": ("TTS Model", "Choose which installed TTS model to use.", None),
     "tts_device_mode": ("TTS Device", "Device mode for Fish TTS: auto, cpu, or accelerator for this OS.", None),
     "tts_emotion_enabled": ("TTS Emotion", "Let Ollama choose and apply an emotion tag for Fish TTS.", None),
     "tts_clone_voice_enabled": ("Clone Voice", "Use reference audio/text for Fish voice cloning. Turn off for normal TTS.", None),
-    "tts_ref_audio_path": ("TTS Ref Audio", "Reference audio used for voice clone prompt.", None),
-    "tts_ref_text_path": ("TTS Ref Transcript", "Transcript paired with the reference audio.", None),
+    "tts_reference_mode": (
+        "TTS Ref Mode",
+        "Choose whether clone reference uses the fixed pair below, Ollama-selected emotional pair, or a random emotional pair.",
+        None,
+    ),
+    "tts_ref_audio_path": ("TTS Ref Audio", "Fixed reference audio used when TTS Ref Mode is fixed.", None),
+    "tts_ref_text_path": ("TTS Ref Transcript", "Fixed transcript paired with the reference audio when TTS Ref Mode is fixed.", None),
     "tts_timeout_sec": ("TTS Timeout", "Maximum time allowed for TTS warmup or synthesis.", "1-3600"),
     "tts_output_volume": ("TTS Volume", "Playback volume multiplier.", "0-2"),
     "audio_output_device": ("Audio Output", "Audio output device id used for playback.", None),
@@ -111,6 +118,7 @@ FIELD_GROUPS: dict[str, str] = {
     "tts_device_mode": "tts",
     "tts_emotion_enabled": "tts",
     "tts_clone_voice_enabled": "tts",
+    "tts_reference_mode": "tts",
     "tts_ref_audio_path": "tts",
     "tts_ref_text_path": "tts",
     "tts_timeout_sec": "tts",
@@ -183,6 +191,10 @@ def _enum_for_field(key: str) -> list[str] | None:
     if key in {"yolo_device_mode", "tts_device_mode", "ollama_device_mode"}:
         accelerator = "mps" if platform.system() == "Darwin" else "gpu"
         return ["auto", "cpu", accelerator]
+    if key == "tts_model_path":
+        return supported_tts_model_paths()
+    if key == "tts_reference_mode":
+        return ["fixed", "ollama_emotion", "random"]
     return None
 
 
@@ -215,11 +227,25 @@ def validate_runtime_config(candidate: RuntimeConfig) -> list[str]:
         errors.append(f"tts_device_mode must be one of {sorted(allowed_device_modes)}")
     if candidate.ollama_device_mode not in allowed_device_modes:
         errors.append(f"ollama_device_mode must be one of {sorted(allowed_device_modes)}")
+    if candidate.tts_reference_mode not in {"fixed", "ollama_emotion", "random"}:
+        errors.append("tts_reference_mode must be one of ['fixed', 'ollama_emotion', 'random']")
     if candidate.history_max_sentences != 10:
         errors.append("history_max_sentences must be fixed at 10 for MVP")
     for path in candidate.tracking_examples_selected + candidate.idle_examples_selected:
         if not Path(path).exists():
             errors.append(f"example file not found: {path}")
+    if candidate.tts_clone_voice_enabled:
+        if candidate.tts_reference_mode == "fixed":
+            fixed_pair = build_fixed_reference_pair(candidate.tts_ref_audio_path, candidate.tts_ref_text_path)
+            if not Path(fixed_pair.audio_path).exists():
+                errors.append(f"tts fixed ref audio not found: {fixed_pair.audio_path}")
+            if not Path(fixed_pair.text_path).exists():
+                errors.append(f"tts fixed ref transcript not found: {fixed_pair.text_path}")
+        else:
+            try:
+                load_emotional_reference_pairs()
+            except Exception as exc:
+                errors.append(str(exc))
     return errors
 
 

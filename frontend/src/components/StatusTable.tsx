@@ -44,6 +44,10 @@ export function StatusTable({
           <tr><th>Ollama TTS Emotion</th><td>{status.tts_emotion_raw ?? "-"}</td></tr>
           <tr><th>Fish TTS Emotion</th><td>{status.tts_emotion_applied ?? "-"}</td></tr>
           <tr><th>Emotion Applied</th><td>{status.tts_emotion_used ? "yes" : "no"}</td></tr>
+          <tr><th>TTS Ref Raw</th><td>{status.tts_reference_raw ?? "-"}</td></tr>
+          <tr><th>TTS Reference Pair</th><td>{status.tts_reference_pair ?? "-"}</td></tr>
+          <tr><th>TTS Ref Audio</th><td>{status.tts_reference_audio_path ?? "-"}</td></tr>
+          <tr><th>TTS Ref Transcript</th><td>{status.tts_reference_text_path ?? "-"}</td></tr>
           <tr><th>Fish Input Text</th><td>{status.tts_input_text ?? "-"}</td></tr>
           <tr><th>LLM Output</th><td>{status.last_llm_output ?? "-"}</td></tr>
           <tr><th>Spoken Text</th><td>{status.last_spoken_text ?? "-"}</td></tr>

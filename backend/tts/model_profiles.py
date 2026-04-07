@@ -95,6 +95,8 @@ class TTSModelProfile:
     decoder_checkpoint_name: str
     emotion_tags: tuple[str, ...]
     emotion_prompt_label: str
+    supports_structured_emotion: bool = True
+    supports_startup_benchmark: bool = True
 
     def format_emotion_text(self, text: str, emotion: str) -> str:
         return f"({emotion}){text.lstrip()}"
@@ -140,17 +142,83 @@ FISH_AUDIO_S1_MINI_PROFILE = TTSModelProfile(
     emotion_prompt_label="Fish Audio S1 emotion tags",
 )
 
+QWEN3_TTS_0_6B_BASE_PROFILE = TTSModelProfile(
+    key="qwen3-tts-12hz-0.6b-base",
+    display_name="Qwen3-TTS 0.6B Base",
+    repo_id="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+    local_dir_name="Qwen__Qwen3-TTS-12Hz-0.6B-Base",
+    required_model_files=(
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "speech_tokenizer/config.json",
+        "speech_tokenizer/configuration.json",
+        "speech_tokenizer/model.safetensors",
+        "speech_tokenizer/preprocessor_config.json",
+    ),
+    decoder_config_name="",
+    decoder_checkpoint_name="",
+    emotion_tags=(),
+    emotion_prompt_label="",
+    supports_structured_emotion=False,
+    supports_startup_benchmark=False,
+)
+
+QWEN3_TTS_1_7B_BASE_PROFILE = TTSModelProfile(
+    key="qwen3-tts-12hz-1.7b-base",
+    display_name="Qwen3-TTS 1.7B Base",
+    repo_id="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+    local_dir_name="Qwen__Qwen3-TTS-12Hz-1.7B-Base",
+    required_model_files=(
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "tokenizer_config.json",
+        "vocab.json",
+        "speech_tokenizer/config.json",
+        "speech_tokenizer/configuration.json",
+        "speech_tokenizer/model.safetensors",
+        "speech_tokenizer/preprocessor_config.json",
+    ),
+    decoder_config_name="",
+    decoder_checkpoint_name="",
+    emotion_tags=(),
+    emotion_prompt_label="",
+    supports_structured_emotion=False,
+    supports_startup_benchmark=False,
+)
+
 DEFAULT_TTS_MODEL_PROFILE = FISH_SPEECH_V1_5_PROFILE
 _ALL_TTS_MODEL_PROFILES = (
+    QWEN3_TTS_0_6B_BASE_PROFILE,
+    QWEN3_TTS_1_7B_BASE_PROFILE,
     FISH_SPEECH_V1_5_PROFILE,
     FISH_AUDIO_S1_MINI_PROFILE,
 )
+
+
+def supported_tts_model_paths() -> list[str]:
+    return [f"model/huggingface/hf_snapshots/{profile.local_dir_name}" for profile in _ALL_TTS_MODEL_PROFILES]
 
 
 def resolve_tts_model_profile(model_path: str) -> TTSModelProfile:
     path = Path(model_path)
     lowered = str(path).lower()
     file_names = {item.name.lower() for item in path.iterdir()} if path.exists() and path.is_dir() else set()
+    if "qwen3-tts" in lowered or QWEN3_TTS_0_6B_BASE_PROFILE.local_dir_name.lower() in lowered:
+        if QWEN3_TTS_1_7B_BASE_PROFILE.local_dir_name.lower() in lowered or "1.7b" in lowered:
+            return QWEN3_TTS_1_7B_BASE_PROFILE
+        return QWEN3_TTS_0_6B_BASE_PROFILE
+    if "model.safetensors" in file_names and (path / "speech_tokenizer").exists():
+        if "1.7b" in lowered:
+            return QWEN3_TTS_1_7B_BASE_PROFILE
+        return QWEN3_TTS_0_6B_BASE_PROFILE
     if "firefly-gan-vq-fsq-8x1024-21hz-generator.pth" in file_names or "fish-speech-1.5" in lowered:
         return FISH_SPEECH_V1_5_PROFILE
     if "codec.pth" in file_names or "s1-mini" in lowered:

@@ -30,6 +30,10 @@ class RuntimeState:
     tts_emotion_applied: str | None = None
     tts_emotion_used: bool = False
     tts_input_text: str | None = None
+    tts_reference_raw: str | None = None
+    tts_reference_pair: str | None = None
+    tts_reference_audio_path: str | None = None
+    tts_reference_text_path: str | None = None
     current_prompt_system: str | None = None
     current_prompt_user: str | None = None
     last_llm_output: str | None = None
@@ -85,6 +89,10 @@ class RuntimeState:
             tts_emotion_applied=self.tts_emotion_applied,
             tts_emotion_used=self.tts_emotion_used,
             tts_input_text=self.tts_input_text,
+            tts_reference_raw=self.tts_reference_raw,
+            tts_reference_pair=self.tts_reference_pair,
+            tts_reference_audio_path=self.tts_reference_audio_path,
+            tts_reference_text_path=self.tts_reference_text_path,
             current_prompt_system=self.current_prompt_system,
             current_prompt_user=self.current_prompt_user,
             last_llm_output=self.last_llm_output,

@@ -20,6 +20,7 @@ export function DeviceStatusBar({ status }: { status: StatusSnapshot }) {
           `main ${status.tts_runtime.effective_device ?? "-"}`,
           formatSelectionSource(status.tts_runtime.selection_source),
           semanticLabel,
+          formatReferencePair(status.tts_reference_pair),
         ].join(" | ")}
         ramMb={status.tts_runtime.ram_mb}
         vramMb={status.tts_runtime.vram_mb}
@@ -92,4 +93,9 @@ function formatSemanticDispatch(runtime: RuntimeComponentStats): string {
     return "semantic stays on one device";
   }
   return "semantic dispatch unknown";
+}
+
+function formatReferencePair(pair?: string | null): string {
+  if (!pair) return "pair pending";
+  return `pair ${pair}`;
 }
