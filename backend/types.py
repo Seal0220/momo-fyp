@@ -170,6 +170,7 @@ class RuntimeConfig(BaseModel):
     camera_height: int = 480
     camera_fps: int = 10
     camera_mirror_preview: bool = False
+    camera_flip_vertical: bool = True
     yolo_model_path: str = "model/yolo/yolo26n.pt"
     yolo_pose_model_path: str = "model/yolo/yolo26n-pose.pt"
     yolo_device_mode: str = "auto"
@@ -219,7 +220,7 @@ class RuntimeConfig(BaseModel):
     serial_baud_rate: int = 115200
     servo_left_zero_deg: float = 93.0
     servo_right_zero_deg: float = 85.0
-    servo_output_inverted: bool = True
+    servo_output_inverted: bool = False
     servo_left_trim_deg: float = 0.0
     servo_right_trim_deg: float = 0.0
     servo_left_gain: float = 4.0

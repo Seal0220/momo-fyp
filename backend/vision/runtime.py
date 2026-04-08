@@ -166,6 +166,7 @@ class VisionRuntime:
             if not ok or frame is None:
                 time.sleep(0.05)
                 continue
+            frame = self._apply_camera_orientation(frame)
             features, servo = self._process_frame(frame)
             annotated = self._annotate(frame.copy(), features, servo)
             ok_jpg, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -186,6 +187,7 @@ class VisionRuntime:
         frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if frame is None:
             raise ValueError("invalid jpeg frame")
+        frame = self._apply_camera_orientation(frame)
         features, servo = self._process_frame(frame)
         annotated = self._annotate(frame.copy(), features, servo)
         ok_jpg, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -202,6 +204,15 @@ class VisionRuntime:
             self.latest_state = state
             self.external_frame_at = time.monotonic()
         return state
+
+    def _apply_camera_orientation(self, frame: np.ndarray) -> np.ndarray:
+        if self.config.camera_mirror_preview and self.config.camera_flip_vertical:
+            return cv2.flip(frame, -1)
+        if self.config.camera_mirror_preview:
+            return cv2.flip(frame, 1)
+        if self.config.camera_flip_vertical:
+            return cv2.flip(frame, 0)
+        return frame
 
     def _process_frame(self, frame: np.ndarray) -> tuple[AudienceFeatures, ServoTelemetry]:
         detections = self.detector.detect(frame)

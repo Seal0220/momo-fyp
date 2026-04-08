@@ -1077,13 +1077,17 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
     checks: list[dict[str, str]] = []
     changed = set(payload.keys())
 
-    if changed & {"camera_source", "camera_device_id", "camera_width", "camera_height", "camera_fps"}:
+    if changed & {"camera_source", "camera_device_id", "camera_width", "camera_height", "camera_fps", "camera_mirror_preview", "camera_flip_vertical"}:
+        orientation = f"hflip={'on' if config.camera_mirror_preview else 'off'}, vflip={'on' if config.camera_flip_vertical else 'off'}"
         if config.camera_source == "browser":
             checks.append(
                 {
                     "component": "vision",
                     "status": "ok",
-                    "message": f"Browser camera config staged: {config.camera_width}x{config.camera_height}@{config.camera_fps}. Applies on next uploaded frame.",
+                    "message": (
+                        f"Browser camera config staged: {config.camera_width}x{config.camera_height}@{config.camera_fps}, "
+                        f"{orientation}. Applies on next uploaded frame."
+                    ),
                 }
             )
         else:
@@ -1091,7 +1095,10 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
                 {
                     "component": "vision",
                     "status": "ok",
-                    "message": f"Backend capture reconfigured to device {config.camera_device_id} at {config.camera_width}x{config.camera_height}@{config.camera_fps}.",
+                    "message": (
+                        f"Backend capture reconfigured to device {config.camera_device_id} at "
+                        f"{config.camera_width}x{config.camera_height}@{config.camera_fps}, {orientation}."
+                    ),
                 }
             )
 

@@ -308,6 +308,27 @@ def test_update_config_accepts_servo_output_inverted():
         brain.serial = original_serial
 
 
+def test_update_config_accepts_camera_flip_toggles():
+    original_config = brain.config.model_copy(deep=True)
+    original_serial = brain.serial
+    try:
+        brain.config = original_config.model_copy(update={"tts_reference_mode": "ollama_emotion"})
+        response = client.post(
+            "/api/config",
+            json={"camera_mirror_preview": True, "camera_flip_vertical": True},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["validation_errors"] == []
+        assert payload["applied_config"]["camera_mirror_preview"] is True
+        assert payload["applied_config"]["camera_flip_vertical"] is True
+        assert any("hflip=on, vflip=on" in item["message"] for item in payload["apply_checks"])
+    finally:
+        brain.config = original_config
+        brain.serial.close()
+        brain.serial = original_serial
+
+
 def test_update_config_accepts_servo_trim_and_gain():
     original_config = brain.config.model_copy(deep=True)
     original_serial = brain.serial

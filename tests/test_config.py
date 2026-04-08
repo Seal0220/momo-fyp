@@ -27,6 +27,7 @@ def test_device_mode_fields_expose_os_specific_enum():
     fields = {field.key: field for field in build_field_catalog(config)}
     accelerator = "mps" if platform.system() == "Darwin" else "gpu"
 
+    assert fields["camera_flip_vertical"].type == "boolean"
     assert fields["yolo_device_mode"].enum == ["auto", "cpu", accelerator]
     assert fields["tts_device_mode"].enum == ["auto", "cpu", accelerator]
     assert fields["ollama_device_mode"].enum == ["auto", "cpu", accelerator]

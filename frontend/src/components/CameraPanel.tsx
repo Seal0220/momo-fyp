@@ -9,15 +9,22 @@ type Props = {
   height?: number;
   fps?: number;
   mirror?: boolean;
+  flipVertical?: boolean;
 };
 
-export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720, fps = 30, mirror = false }: Props) {
+export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720, fps = 30, mirror = false, flipVertical = false }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const uploadInFlightRef = useRef(false);
   const [permission, setPermission] = useState<"idle" | "granted" | "denied">("idle");
   const [streamMode, setStreamMode] = useState<string>("pending");
   const [lastUploadAt, setLastUploadAt] = useState<number | null>(null);
+  const previewTransform = useMemo(() => {
+    const transforms: string[] = [];
+    if (mirror) transforms.push("scaleX(-1)");
+    if (flipVertical) transforms.push("scaleY(-1)");
+    return transforms.length > 0 ? transforms.join(" ") : undefined;
+  }, [mirror, flipVertical]);
   const constraints = useMemo(
     () => ({
       audio: false,
@@ -55,14 +62,7 @@ export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720
           canvas.height = height;
           const ctx = canvas.getContext("2d");
           if (!ctx) return;
-          if (mirror) {
-            ctx.save();
-            ctx.scale(-1, 1);
-            ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
-            ctx.restore();
-          } else {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          }
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           uploadInFlightRef.current = true;
           canvas.toBlob((blob) => {
             if (!blob) {
@@ -86,7 +86,7 @@ export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720
       window.clearInterval(timer);
       stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [constraints, fps, width, height, mirror]);
+  }, [constraints, fps, width, height]);
 
   return (
     <section className="panel camera-panel">
@@ -95,7 +95,13 @@ export function CameraPanel({ status, cameraDeviceId, width = 1280, height = 720
         <span>{status.camera_mode ?? "n/a"}</span>
       </div>
       <div className="camera-stage">
-        <video ref={videoRef} className="camera-video" playsInline muted />
+        <video
+          ref={videoRef}
+          className="camera-video"
+          playsInline
+          muted
+          style={previewTransform ? { transform: previewTransform } : undefined}
+        />
         <canvas ref={canvasRef} className="camera-hidden" />
         <div className="camera-stream">
           <SkeletonOverlay points={status.audience.pose_keypoints} />

@@ -152,6 +152,7 @@ export function Dashboard() {
           height={Number(config.camera_height ?? 480)}
           fps={Number(config.camera_fps ?? 10)}
           mirror={Boolean(config.camera_mirror_preview ?? false)}
+          flipVertical={Boolean(config.camera_flip_vertical ?? false)}
         />
         <RuntimeOverview status={status} config={config} applyChecks={updateState.applyChecks} />
         <PipelineStage active={status.pipeline.stage} elapsedMs={status.pipeline.elapsed_ms} />
