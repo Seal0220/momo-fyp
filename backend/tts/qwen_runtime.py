@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import shutil
 import subprocess
 from pathlib import Path
@@ -62,6 +63,7 @@ class QwenVoiceCloneTTS:
         self.loaded = False
         self._model = None
         self._clone_prompt = None
+        self._prefer_stable_cuda_profile = False
         self.device = get_tts_device(device_mode)
         self.device_backend = backend_label_for_device(self.device)
 
@@ -80,24 +82,15 @@ class QwenVoiceCloneTTS:
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
         kwargs = dict(request_overrides or {})
-        if self._clone_prompt is not None:
-            wavs, sr = self._model.generate_voice_clone(
-                text=text,
-                language="Chinese",
-                voice_clone_prompt=self._clone_prompt,
-                **kwargs,
-            )
-        else:
-            ref_audio = str(_ensure_wav_ref(Path(self.ref_audio_path)))
-            ref_text = Path(self.ref_text_path).read_text(encoding="utf-8").strip() or None
-            wavs, sr = self._model.generate_voice_clone(
-                text=text,
-                language="Chinese",
-                ref_audio=ref_audio,
-                ref_text=ref_text,
-                x_vector_only_mode=not bool(ref_text),
-                **kwargs,
-            )
+        try:
+            wavs, sr = self._generate_voice_clone(text, kwargs)
+        except RuntimeError as exc:
+            if not self._should_retry_cuda_numeric_failure(exc):
+                raise
+            self._prefer_stable_cuda_profile = True
+            self.unload()
+            self._ensure_model()
+            wavs, sr = self._generate_voice_clone(text, kwargs)
         raw = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
         if hasattr(raw, "detach"):
             raw = raw.detach().cpu().float().numpy()
@@ -147,13 +140,13 @@ class QwenVoiceCloneTTS:
         except ImportError as exc:
             raise RuntimeError("qwen-tts is required for Qwen3-TTS runtime. Run `uv sync`.") from exc
 
-        for device_map, dtype in self._load_attempts(torch):
+        for device_map, dtype, attn_implementation in self._load_attempts(torch):
             try:
                 self._model = Qwen3TTSModel.from_pretrained(
                     self.model_path,
                     device_map=device_map,
                     dtype=dtype,
-                    attn_implementation="sdpa",
+                    attn_implementation=attn_implementation,
                 )
                 break
             except Exception:
@@ -171,9 +164,51 @@ class QwenVoiceCloneTTS:
             )
         self.loaded = True
 
-    def _load_attempts(self, torch) -> list[tuple[str | dict[str, str], object]]:
+    def _generate_voice_clone(self, text: str, request_overrides: dict) -> tuple[list[np.ndarray] | np.ndarray, int]:
+        if self._clone_prompt is not None:
+            return self._model.generate_voice_clone(
+                text=text,
+                language="Chinese",
+                voice_clone_prompt=self._clone_prompt,
+                **request_overrides,
+            )
+
+        ref_audio = str(_ensure_wav_ref(Path(self.ref_audio_path)))
+        ref_text = Path(self.ref_text_path).read_text(encoding="utf-8").strip() or None
+        return self._model.generate_voice_clone(
+            text=text,
+            language="Chinese",
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            x_vector_only_mode=not bool(ref_text),
+            **request_overrides,
+        )
+
+    def _should_retry_cuda_numeric_failure(self, exc: RuntimeError) -> bool:
+        if self._prefer_stable_cuda_profile:
+            return False
+        if platform.system() != "Windows" or not self.device.startswith("cuda"):
+            return False
+        message = str(exc).lower()
+        return any(
+            token in message
+            for token in (
+                "probability tensor contains either",
+                "invalid multinomial distribution",
+                "nan",
+                "inf",
+            )
+        )
+
+    def _load_attempts(self, torch) -> list[tuple[str | dict[str, str], object, str]]:
         if self.device.startswith("cuda"):
-            return [("cuda:0", torch.float16), ("cpu", torch.float32)]
+            if self._prefer_stable_cuda_profile and platform.system() == "Windows":
+                return [
+                    ("cuda:0", torch.float32, "eager"),
+                    ("cuda:0", torch.float16, "eager"),
+                    ("cpu", torch.float32, "sdpa"),
+                ]
+            return [("cuda:0", torch.float16, "sdpa"), ("cpu", torch.float32, "sdpa")]
         if self.device == "mps":
-            return [("mps", torch.float32), ({"": "mps"}, torch.float32), ("cpu", torch.float32)]
-        return [("cpu", torch.float32)]
+            return [("mps", torch.float32, "sdpa"), ({"": "mps"}, torch.float32, "sdpa"), ("cpu", torch.float32, "sdpa")]
+        return [("cpu", torch.float32, "sdpa")]

@@ -1179,6 +1179,49 @@ def test_qwen_voice_clone_tts_set_reference_paths_clears_cached_prompt():
     assert tts._clone_prompt is None
 
 
+def test_qwen_voice_clone_tts_retries_windows_cuda_numeric_failure_with_stable_gpu(monkeypatch, tmp_path):
+    ref_audio = tmp_path / "voice.wav"
+    ref_text = tmp_path / "transcript.txt"
+    ref_audio.write_bytes(b"wav")
+    ref_text.write_text("測試參考", encoding="utf-8")
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    tts = QwenVoiceCloneTTS(str(model_dir), str(ref_audio), str(ref_text), device_mode="cpu")
+    tts.device = "cuda:0"
+    tts.device_backend = "gpu"
+
+    class UnstableModel:
+        def generate_voice_clone(self, **kwargs):
+            raise RuntimeError("probability tensor contains either `inf`, `nan` or element < 0")
+
+    class StableModel:
+        def generate_voice_clone(self, **kwargs):
+            return [np.zeros(8, dtype=np.float32)], 24000
+
+    state = {"stable_model_requested": False}
+
+    def fake_ensure_model():
+        if tts._prefer_stable_cuda_profile:
+            state["stable_model_requested"] = True
+            tts._model = StableModel()
+        else:
+            tts._model = UnstableModel()
+        tts._clone_prompt = object()
+        tts.loaded = True
+
+    writes: list[tuple[str, int]] = []
+
+    monkeypatch.setattr("backend.tts.qwen_runtime.platform.system", lambda: "Windows")
+    monkeypatch.setattr(tts, "_ensure_model", fake_ensure_model)
+    monkeypatch.setattr("backend.tts.qwen_runtime.sf.write", lambda path, audio, sr: writes.append((str(path), sr)))
+
+    output = tts.synthesize("測試。", str(tmp_path / "out.wav"))
+
+    assert output.endswith("out.wav")
+    assert state["stable_model_requested"] is True
+    assert writes == [(str(tmp_path / "out.wav"), 24000)]
+
+
 def test_fish_clone_tts_set_reference_paths_updates_runtime_values():
     tts = QwenCloneTTS(
         "model/huggingface/hf_snapshots/fishaudio__s1-mini",
