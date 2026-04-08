@@ -123,6 +123,26 @@ def test_browser_loop_processes_only_latest_uploaded_frame(monkeypatch):
     assert processed == [b"frame-new"]
 
 
+def test_detect_fps_reports_recent_processing_rate(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    now = 100.0
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    with runtime.lock:
+        runtime._processed_frame_times.extend([99.0, 99.2, 99.4, 99.6, 99.8, 100.0])
+
+    assert runtime.detect_fps() == 5.0
+
+
+def test_detect_fps_drops_to_zero_when_stale(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    now = 103.5
+    monkeypatch.setattr(time, "monotonic", lambda: now)
+    with runtime.lock:
+        runtime._processed_frame_times.extend([100.0, 100.5, 101.0])
+
+    assert runtime.detect_fps() == 0.0
+
+
 def test_backend_capture_loop_processes_oriented_frame(monkeypatch):
     runtime = VisionRuntime(RuntimeConfig(camera_source="backend", camera_mirror_preview=True, camera_flip_vertical=True))
     raw = np.array(

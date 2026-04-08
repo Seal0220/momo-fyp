@@ -90,6 +90,7 @@ export type StatusSnapshot = {
   llm_latency_ms?: number | null;
   tts_latency_ms?: number | null;
   playback_progress: number;
+  yolo_detect_fps: number;
   tts_emotion_raw?: string | null;
   tts_emotion_applied?: string | null;
   tts_emotion_used: boolean;

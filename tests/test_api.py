@@ -47,6 +47,25 @@ def test_status_endpoint_returns_pipeline_and_stats():
     assert "ollama_runtime" in payload
     assert "yolo_person_runtime" in payload
     assert "yolo_pose_runtime" in payload
+    assert "yolo_detect_fps" in payload
+
+
+def test_status_endpoint_uses_cached_runtime_status_and_exposes_detect_fps():
+    original_refresh = brain.refresh_runtime_status
+    original_detect_fps = brain.vision.detect_fps
+
+    async def fail_refresh():
+        raise AssertionError("status endpoint should not force runtime refresh")
+
+    brain.refresh_runtime_status = fail_refresh
+    brain.vision.detect_fps = lambda: 7.25
+    try:
+        response = client.get("/api/status")
+        assert response.status_code == 200
+        assert response.json()["yolo_detect_fps"] == 7.25
+    finally:
+        brain.refresh_runtime_status = original_refresh
+        brain.vision.detect_fps = original_detect_fps
 
 
 def test_simulate_pipeline_returns_prompt_and_snapshot():
@@ -198,6 +217,32 @@ def test_generate_tracking_line_uses_person_crop_mode_when_enabled():
         brain.state.event_log = original_event_log
 
 
+def test_generate_tracking_line_skips_llm_and_tts_when_yolo_only_mode_enabled():
+    original_config = brain.config.model_copy(deep=True)
+    original_generate = brain._generate_with_ollama
+    original_speak = brain._speak_line
+    original_stage = brain.state.pipeline.stage
+
+    async def fail_generate(*args, **kwargs):
+        raise AssertionError("LLM should be skipped in YOLO-only mode")
+
+    async def fail_speak(*args, **kwargs):
+        raise AssertionError("TTS should be skipped in YOLO-only mode")
+
+    brain.config = original_config.model_copy(update={"yolo_only_mode": True})
+    brain._generate_with_ollama = fail_generate
+    brain._speak_line = fail_speak
+
+    try:
+        asyncio.run(brain.generate_tracking_line())
+        assert brain.state.pipeline.stage == PipelineStage.IDLE
+    finally:
+        brain.config = original_config
+        brain._generate_with_ollama = original_generate
+        brain._speak_line = original_speak
+        brain.state.set_pipeline_stage(original_stage)
+
+
 def test_generate_tracking_line_falls_back_when_person_crop_missing():
     original_config = brain.config.model_copy(deep=True)
     original_prompt_builder = brain.prompts.build_tracking_prompt
@@ -258,6 +303,19 @@ def test_update_config_returns_apply_checks():
     payload = response.json()
     assert "apply_checks" in payload
     assert isinstance(payload["apply_checks"], list)
+
+
+def test_update_config_accepts_yolo_only_mode():
+    original_config = brain.config.model_copy(deep=True)
+    try:
+        brain.config = original_config.model_copy(update={"tts_reference_mode": "fixed"})
+        response = client.post("/api/config", json={"yolo_only_mode": True})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["applied_config"]["yolo_only_mode"] is True
+        assert any(item["component"] == "pipeline" for item in payload["apply_checks"])
+    finally:
+        brain.config = original_config
 
 
 def test_update_config_validation_failure_returns_feedback():

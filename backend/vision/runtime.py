@@ -36,6 +36,7 @@ class VisionRuntime:
         self.motion = MotionTracker()
         self.top_color_history: deque[str] = deque(maxlen=6)
         self.bottom_color_history: deque[str] = deque(maxlen=6)
+        self._processed_frame_times: deque[float] = deque(maxlen=60)
         self.capture: cv2.VideoCapture | None = None
         self.thread: threading.Thread | None = None
         self.running = False
@@ -71,6 +72,8 @@ class VisionRuntime:
             self.capture.release()
             self.capture = None
         self._clear_pending_browser_frame()
+        with self.lock:
+            self._processed_frame_times.clear()
 
     def reconfigure(self, config: RuntimeConfig) -> None:
         self.config = config
@@ -81,6 +84,8 @@ class VisionRuntime:
         self.top_color_history.clear()
         self.bottom_color_history.clear()
         self._clear_pending_browser_frame()
+        with self.lock:
+            self._processed_frame_times.clear()
         self.stop()
         self.start()
 
@@ -94,6 +99,19 @@ class VisionRuntime:
                 frame_shape=self.latest_state.frame_shape,
                 target_seen_at=self.latest_state.target_seen_at,
             )
+
+    def detect_fps(self) -> float:
+        with self.lock:
+            timestamps = list(self._processed_frame_times)
+        if len(timestamps) < 2:
+            return 0.0
+        latest = timestamps[-1]
+        if time.monotonic() - latest > 2.0:
+            return 0.0
+        span = latest - timestamps[0]
+        if span <= 0:
+            return 0.0
+        return round((len(timestamps) - 1) / span, 2)
 
     def list_cameras(self) -> list[dict]:
         if self.config.camera_source == "browser":
@@ -189,6 +207,7 @@ class VisionRuntime:
                     frame_shape=(frame.shape[1], frame.shape[0]),
                     target_seen_at=time.monotonic() if features.track_id is not None else self.latest_state.target_seen_at,
                 )
+                self._processed_frame_times.append(time.monotonic())
             time.sleep(max(0.0, 1.0 / max(1, self.config.camera_fps) * 0.5))
 
     def submit_jpeg_frame(self, jpeg_bytes: bytes) -> VisionState:
@@ -219,6 +238,7 @@ class VisionRuntime:
         with self.lock:
             self.latest_state = state
             self.external_frame_at = time.monotonic()
+            self._processed_frame_times.append(time.monotonic())
         return state
 
     def _queue_browser_frame(self, jpeg_bytes: bytes) -> None:

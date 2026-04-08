@@ -22,6 +22,7 @@ export function RuntimeOverview({
         <RuntimeItem label="Camera Source" value={String(config.camera_source ?? "-")} />
         <RuntimeItem label="Camera Device" value={String(config.camera_device_id ?? "-")} />
         <RuntimeItem label="Applied Camera Mode" value={status.camera_mode ?? "-"} />
+        <RuntimeItem label="YOLO Detect FPS" value={status.yolo_detect_fps > 0 ? `${status.yolo_detect_fps.toFixed(2)} fps` : "-"} />
         <RuntimeItem label="Audio Output" value={String(config.audio_output_device ?? "-")} />
         <RuntimeItem label="TTS Timeout" value={`${String(config.tts_timeout_sec ?? "-")} s`} />
         <RuntimeItem label="Serial Port" value={String(config.serial_port ?? "-")} />

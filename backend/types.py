@@ -131,6 +131,7 @@ class StatusSnapshot(BaseModel):
     llm_latency_ms: int | None = None
     tts_latency_ms: int | None = None
     playback_progress: float = 0.0
+    yolo_detect_fps: float = 0.0
     tts_emotion_raw: str | None = None
     tts_emotion_applied: str | None = None
     tts_emotion_used: bool = False
@@ -171,6 +172,7 @@ class RuntimeConfig(BaseModel):
     camera_fps: int = 30
     camera_mirror_preview: bool = False
     camera_flip_vertical: bool = True
+    yolo_only_mode: bool = False
     yolo_model_path: str = "model/yolo/yolo26n.pt"
     yolo_pose_model_path: str = "model/yolo/yolo26n-pose.pt"
     yolo_device_mode: str = "auto"
@@ -208,7 +210,7 @@ class RuntimeConfig(BaseModel):
     tts_device_mode: str = "auto"
     tts_emotion_enabled: bool = True
     tts_clone_voice_enabled: bool = True
-    tts_reference_mode: str = "ollama_emotion_pair"
+    tts_reference_mode: str = "fixed_pair"
     tts_ref_audio_path: str = "resource/voice/ref-voice3.wav"
     tts_ref_text_path: str = "resource/voice/transcript3.txt"
     tts_timeout_sec: int = 300

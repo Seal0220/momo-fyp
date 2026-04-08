@@ -29,6 +29,7 @@ export function StatusTable({
           <tr><th>Servo</th><td>L {status.servo.left_deg} / R {status.servo.right_deg}</td></tr>
           <tr><th>Tracking Source</th><td>{status.servo.tracking_source}</td></tr>
           <tr><th>Camera Mode</th><td>{status.camera_mode ?? "-"}</td></tr>
+          <tr><th>YOLO Detect FPS</th><td>{status.yolo_detect_fps > 0 ? status.yolo_detect_fps.toFixed(2) : "-"}</td></tr>
           <tr><th>Playback</th><td>{Math.round(status.playback_progress * 100)}%</td></tr>
           <tr><th>Pipeline Elapsed</th><td>{status.pipeline.elapsed_ms} ms</td></tr>
           <tr><th>YOLO Person Device</th><td>{status.yolo_person_runtime.effective_device ?? "-"}</td></tr>

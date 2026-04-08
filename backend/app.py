@@ -56,6 +56,7 @@ REFERENCE_PAIR_TAG_TO_NAME = {
     "悲慟自責絕望": "極度的悲慟和自責與絕望",
 }
 REFERENCE_PAIR_NAME_TO_TAG = {value: key for key, value in REFERENCE_PAIR_TAG_TO_NAME.items()}
+RUNTIME_STATUS_REFRESH_INTERVAL_SEC = 2.0
 
 
 class Brain:
@@ -106,10 +107,12 @@ class Brain:
         if should_prepare_models():
             await asyncio.to_thread(self._prepare_runtime_models)
         await self._print_startup_diagnostics()
+        await self.refresh_runtime_status()
         self.vision.start()
         self.background_tasks = [
             asyncio.create_task(self.vision_loop()),
             asyncio.create_task(self.housekeeping_loop()),
+            asyncio.create_task(self.runtime_status_loop()),
         ]
 
     async def stop(self) -> None:
@@ -426,6 +429,7 @@ class Brain:
         snap.camera_mode = f"{self.config.camera_width}x{self.config.camera_height}@{self.config.camera_fps}"
         snap.ollama_connected = self.ollama_connected
         snap.playback_progress = self.audio.progress()
+        snap.yolo_detect_fps = self.vision.detect_fps()
         snap.yolo_person_runtime = self.yolo_person_runtime
         snap.yolo_pose_runtime = self.yolo_pose_runtime
         snap.tts_runtime = self.tts_runtime
@@ -448,6 +452,14 @@ class Brain:
         while True:
             self.resources.cleanup_temp_audio()
             await asyncio.sleep(30)
+
+    async def runtime_status_loop(self) -> None:
+        while True:
+            try:
+                await self.refresh_runtime_status()
+            except Exception as exc:
+                self.state.event_log = [f"runtime status refresh error: {exc}", *self.state.event_log][:20]
+            await asyncio.sleep(RUNTIME_STATUS_REFRESH_INTERVAL_SEC)
 
     async def vision_loop(self) -> None:
         while True:
@@ -568,7 +580,12 @@ class Brain:
         calibrated = zero_deg + (delta * gain) + trim_deg
         return round(min(max(calibrated, min_deg), max_deg), 2)
 
+    def _yolo_only_mode_enabled(self) -> bool:
+        return bool(self.config.yolo_only_mode)
+
     async def _maybe_generate_tracking_line(self) -> None:
+        if self._yolo_only_mode_enabled():
+            return
         if self.audio.is_playing() or self.generation_lock.locked():
             return
         if self.state.sentence_index >= 10:
@@ -581,6 +598,8 @@ class Brain:
         await self.generate_tracking_line()
 
     async def _maybe_generate_idle_line(self) -> None:
+        if self._yolo_only_mode_enabled():
+            return
         if self.audio.is_playing() or self.generation_lock.locked():
             return
         if time.monotonic() - self.last_idle_line_at < self.config.idle_sentence_interval_ms / 1000:
@@ -588,6 +607,9 @@ class Brain:
         await self.generate_idle_line()
 
     async def generate_tracking_line(self) -> None:
+        if self._yolo_only_mode_enabled():
+            self.state.set_pipeline_stage(PipelineStage.IDLE)
+            return
         async with self.generation_lock:
             sentence_index = self.state.sentence_index + 1
             self.state.active_sentence_index = sentence_index
@@ -620,6 +642,9 @@ class Brain:
             self.last_sentence_finished_at = time.monotonic()
 
     async def generate_idle_line(self) -> None:
+        if self._yolo_only_mode_enabled():
+            self.state.set_pipeline_stage(PipelineStage.IDLE)
+            return
         async with self.generation_lock:
             self.state.set_pipeline_stage(PipelineStage.LLM)
             prompt = self.prompts.build_idle_prompt(
@@ -1132,6 +1157,15 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
     if changed & {"yolo_model_path", "yolo_pose_model_path", "yolo_device_mode"}:
         checks.append({"component": "vision-model", "status": "ok", "message": f"YOLO model paths updated and verified. Device mode is {config.yolo_device_mode}."})
 
+    if changed & {"yolo_only_mode"}:
+        checks.append(
+            {
+                "component": "pipeline",
+                "status": "ok",
+                "message": "YOLO-only mode enabled. Automatic LLM and TTS generation are disabled." if config.yolo_only_mode else "YOLO-only mode disabled. Automatic LLM and TTS generation restored.",
+            }
+        )
+
     if changed & {"ollama_base_url", "ollama_model", "ollama_device_mode", "ollama_timeout_sec", "llm_use_person_crop"}:
         client = OllamaClient(config.ollama_base_url, min(config.ollama_timeout_sec, 15), config.ollama_device_mode)
         try:
@@ -1287,7 +1321,6 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/status")
 async def get_status():
-    await brain.refresh_runtime_status()
     return brain.snapshot()
 
 

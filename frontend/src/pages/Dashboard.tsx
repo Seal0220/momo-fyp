@@ -56,6 +56,7 @@ const initialStatus: StatusSnapshot = {
   ollama_connected: false,
   tts_loaded: false,
   playback_progress: 0,
+  yolo_detect_fps: 0,
   tts_emotion_raw: null,
   tts_emotion_applied: null,
   tts_emotion_used: false,

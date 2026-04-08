@@ -85,6 +85,7 @@ class RuntimeState:
             servo=self.servo,
             llm_latency_ms=self.llm_latency_ms,
             tts_latency_ms=self.tts_latency_ms,
+            yolo_detect_fps=0.0,
             tts_emotion_raw=self.tts_emotion_raw,
             tts_emotion_applied=self.tts_emotion_applied,
             tts_emotion_used=self.tts_emotion_used,
