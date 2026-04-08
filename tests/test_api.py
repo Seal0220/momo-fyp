@@ -1375,6 +1375,23 @@ def test_build_request_skips_references_when_clone_voice_disabled():
 
     assert request.text == "測試台詞。"
     assert request.references == []
+    assert request.max_new_tokens == 104
+
+
+def test_build_request_estimates_max_new_tokens_from_spoken_text():
+    tts = QwenCloneTTS("model", "missing.wav", "missing.txt", clone_voice_enabled=False)
+
+    request = tts._build_request("(excited)牆上裂縫數完，幫你找樂子。")
+
+    assert request.max_new_tokens == 190
+
+
+def test_build_request_allows_max_new_tokens_override():
+    tts = QwenCloneTTS("model", "missing.wav", "missing.txt", clone_voice_enabled=False)
+
+    request = tts._build_request("測試台詞。", request_overrides={"max_new_tokens": 777})
+
+    assert request.max_new_tokens == 777
 
 
 def test_clean_tts_emotion_normalizes_raw_label():

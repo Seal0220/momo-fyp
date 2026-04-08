@@ -35,6 +35,7 @@ from backend.tts.semantic_runtime import (
 )
 
 _FISH_CONTROL_TOKEN_RE = re.compile(r"\([^()]{1,40}\)")
+_FISH_PUNCTUATION_RE = re.compile(r"[，。！？!?;；:,、…]")
 
 
 @dataclass(frozen=True)
@@ -378,7 +379,7 @@ class FishCloneTTS:
             "reference_id": None,
             "use_memory_cache": "on",
             "chunk_length": 200,
-            "max_new_tokens": 1024,
+            "max_new_tokens": self._estimate_max_new_tokens(text),
             "top_p": 0.8,
             "repetition_penalty": 1.1,
             "temperature": 0.7,
@@ -389,6 +390,16 @@ class FishCloneTTS:
         return schema_module.ServeTTSRequest(
             **payload,
         )
+
+    def _estimate_max_new_tokens(self, text: str) -> int:
+        cleaned = self._strip_control_tokens(text)
+        if not cleaned:
+            return 96
+        non_space_chars = sum(1 for char in cleaned if not char.isspace())
+        punctuation_count = len(_FISH_PUNCTUATION_RE.findall(cleaned))
+        ascii_word_count = len(re.findall(r"[A-Za-z0-9]+", cleaned))
+        budget = 48 + (non_space_chars * 10) + (punctuation_count * 6) + (ascii_word_count * 4)
+        return max(96, min(512, budget))
 
     def _run_inference(self, request) -> tuple[np.ndarray, int]:
         final_audio: np.ndarray | None = None
