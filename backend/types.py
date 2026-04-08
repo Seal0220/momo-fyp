@@ -106,6 +106,7 @@ class RuntimeComponentStats(BaseModel):
     backend: str | None = None
     selection_source: str | None = None
     semantic_dispatch_mode: str | None = None
+    precision_mode: str | None = None
     ram_mb: float | None = None
     vram_mb: float | None = None
 

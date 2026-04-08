@@ -48,12 +48,22 @@ class BenchmarkShutdownRequested(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class TTSBenchmarkCandidate:
+    name: str
+    device_mode: str
+    semantic_dispatch_mode: str
+    precision_mode: str
+
+
 _BENCHMARK_REQUEST_OVERRIDES = {
     "chunk_length": 32,
     "max_new_tokens": 24,
     "temperature": 0.35,
 }
 _BENCHMARK_POLL_INTERVAL_SEC = 0.2
+_BENCHMARK_TEMP_DIR_CLEANUP_RETRIES = 5
+_BENCHMARK_TEMP_DIR_CLEANUP_DELAY_SEC = 0.2
 
 
 def _fish_configs_dir() -> Path:
@@ -114,12 +124,14 @@ class FishCloneTTS:
         clone_voice_enabled: bool = True,
         device_mode: str = "auto",
         semantic_dispatch_mode: str = "single",
+        precision_mode: str | None = None,
     ) -> None:
         self.model_path = model_path
         self.ref_audio_path = ref_audio_path
         self.ref_text_path = ref_text_path
         self.clone_voice_enabled = clone_voice_enabled
         self.semantic_dispatch_mode = semantic_dispatch_mode
+        self.precision_mode = precision_mode or _default_precision_mode_for_device(get_tts_device(device_mode))
         self.loaded = False
         self._model_manager = None
         self._engine = None
@@ -138,6 +150,7 @@ class FishCloneTTS:
                 ref_text_path,
                 clone_voice_enabled=clone_voice_enabled,
                 device_mode=device_mode,
+                precision_mode=self.precision_mode,
             )
             self.device = self._delegate.device
             self.device_backend = self._delegate.device_backend
@@ -212,7 +225,7 @@ class FishCloneTTS:
 
         import torch
 
-        precision = torch.half if self.device.startswith("cuda") else torch.bfloat16
+        precision = _torch_dtype_for_precision_mode(torch, self.precision_mode)
         active_dispatch_mode = self.semantic_dispatch_mode
         try:
             llama_queue = make_semantic_queue(
@@ -233,6 +246,7 @@ class FishCloneTTS:
                 compile=False,
             )
         self.semantic_dispatch_mode = active_dispatch_mode
+        self.precision_mode = _precision_mode_name(precision)
         decoder_model = _load_fish_decoder_model(
             config_name=self.model_profile.decoder_config_name,
             checkpoint_path=str(Path(self.model_path) / self.model_profile.decoder_checkpoint_name),
@@ -281,6 +295,7 @@ class FishCloneTTS:
                 ref_text_path,
                 clone_voice_enabled=clone_voice_enabled,
                 device_mode="auto",
+                precision_mode=None,
             )
             result = SemanticBenchmarkResult(
                 name=profile.key,
@@ -288,6 +303,7 @@ class FishCloneTTS:
                 semantic_dispatch_mode="single",
                 elapsed_ms=0,
                 ok=True,
+                precision_mode=tts.precision_mode,
             )
             return TTSAutoBenchmarkSelection(tts=tts, result=result, results=[result])
         plans = benchmark_plans_for_current_host()
@@ -297,13 +313,14 @@ class FishCloneTTS:
             return None
         results: list[SemanticBenchmarkResult] = []
         best_result: SemanticBenchmarkResult | None = None
-        for plan in plans:
+        for candidate in _benchmark_candidates_for_profile(profile.key, plans):
             print(
-                f"[startup] tts benchmark running candidate={plan.name} device={plan.device_mode} semantic={plan.semantic_dispatch_mode}",
+                f"[startup] tts benchmark running candidate={candidate.name} device={candidate.device_mode} "
+                f"semantic={candidate.semantic_dispatch_mode} precision={candidate.precision_mode}",
                 flush=True,
             )
             result = _run_benchmark_candidate_subprocess(
-                plan=plan,
+                plan=candidate,
                 model_path=model_path,
                 ref_audio_path=ref_audio_path,
                 ref_text_path=ref_text_path,
@@ -313,7 +330,7 @@ class FishCloneTTS:
             detail = f" detail={result.detail[:200]}" if result.detail else ""
             print(
                 f"[startup] tts benchmark candidate={result.name} status={'ok' if result.ok else 'error'} "
-                f"elapsed_ms={result.elapsed_ms} semantic={result.semantic_dispatch_mode}{detail}",
+                f"elapsed_ms={result.elapsed_ms} semantic={result.semantic_dispatch_mode} precision={result.precision_mode}{detail}",
                 flush=True,
             )
             if result.ok and (best_result is None or result.elapsed_ms < best_result.elapsed_ms):
@@ -328,6 +345,7 @@ class FishCloneTTS:
             clone_voice_enabled=clone_voice_enabled,
             device_mode=best_result.device_mode,
             semantic_dispatch_mode=best_result.semantic_dispatch_mode,
+            precision_mode=best_result.precision_mode,
         )
         return TTSAutoBenchmarkSelection(tts=best_tts, result=best_result, results=results)
 
@@ -649,7 +667,7 @@ QwenCloneTTS = FishCloneTTS
 
 def _run_benchmark_candidate_subprocess(
     *,
-    plan,
+    plan: TTSBenchmarkCandidate,
     model_path: str,
     ref_audio_path: str,
     ref_text_path: str,
@@ -657,10 +675,11 @@ def _run_benchmark_candidate_subprocess(
     sample_text: str,
 ) -> SemanticBenchmarkResult:
     timeout_sec = _benchmark_timeout_sec()
-    with tempfile.TemporaryDirectory(prefix="momo_tts_bench_") as tmp_dir:
-        result_path = Path(tmp_dir) / "result.json"
-        stdout_path = Path(tmp_dir) / "stdout.log"
-        stderr_path = Path(tmp_dir) / "stderr.log"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="momo_tts_bench_"))
+    try:
+        result_path = tmp_dir / "result.json"
+        stdout_path = tmp_dir / "stdout.log"
+        stderr_path = tmp_dir / "stderr.log"
         command = [
             sys.executable,
             "-m",
@@ -681,6 +700,8 @@ def _run_benchmark_candidate_subprocess(
             sample_text,
             "--result-path",
             str(result_path),
+            "--precision-mode",
+            plan.precision_mode,
         ]
         if clone_voice_enabled:
             command.append("--clone-voice-enabled")
@@ -715,9 +736,11 @@ def _run_benchmark_candidate_subprocess(
                             semantic_dispatch_mode=plan.semantic_dispatch_mode,
                             elapsed_ms=-1,
                             ok=False,
+                            precision_mode=plan.precision_mode,
                             detail=f"benchmark timed out after {timeout_sec} seconds",
                         )
                     time.sleep(_BENCHMARK_POLL_INTERVAL_SEC)
+                _wait_for_process_exit(process, timeout=1.0)
             except BaseException:
                 _terminate_benchmark_process(process)
                 raise
@@ -734,8 +757,11 @@ def _run_benchmark_candidate_subprocess(
             semantic_dispatch_mode=plan.semantic_dispatch_mode,
             elapsed_ms=-1,
             ok=False,
+            precision_mode=plan.precision_mode,
             detail=detail[-1200:],
         )
+    finally:
+        _cleanup_benchmark_temp_dir(tmp_dir)
 
 
 def _benchmark_timeout_sec() -> int:
@@ -744,6 +770,77 @@ def _benchmark_timeout_sec() -> int:
         return max(10, int(raw))
     except ValueError:
         return 120
+
+
+def _benchmark_candidates_for_profile(profile_key: str, plans) -> list[TTSBenchmarkCandidate]:
+    candidates: list[TTSBenchmarkCandidate] = []
+    for plan in plans:
+        for precision_mode in _benchmark_precision_modes(profile_key, plan.device_mode):
+            candidates.append(
+                TTSBenchmarkCandidate(
+                    name=f"{plan.name}-{precision_mode}",
+                    device_mode=plan.device_mode,
+                    semantic_dispatch_mode=plan.semantic_dispatch_mode,
+                    precision_mode=precision_mode,
+                )
+            )
+    return candidates
+
+
+def _benchmark_precision_modes(profile_key: str, device_mode: str) -> tuple[str, ...]:
+    if profile_key.startswith("qwen3-tts"):
+        if device_mode == "gpu":
+            return ("float16", "float32")
+        return ("float32",)
+    if device_mode == "gpu":
+        return ("float16", "float32")
+    if device_mode == "cpu":
+        return ("bfloat16", "float32")
+    return ("float32",)
+
+
+def _default_precision_mode_for_device(device: str) -> str:
+    return "float16" if device.startswith("cuda") else "bfloat16"
+
+
+def _precision_mode_name(dtype) -> str:
+    text = str(dtype)
+    if text.startswith("torch."):
+        return text.split(".", 1)[1]
+    return text
+
+
+def _torch_dtype_for_precision_mode(torch, precision_mode: str):
+    mapping = {
+        "float16": torch.float16,
+        "float32": torch.float32,
+        "bfloat16": torch.bfloat16,
+    }
+    try:
+        return mapping[precision_mode]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported TTS precision mode: {precision_mode}") from exc
+
+
+def _cleanup_benchmark_temp_dir(path: Path) -> None:
+    retries = _BENCHMARK_TEMP_DIR_CLEANUP_RETRIES if os.name == "nt" else 1
+    last_error: OSError | None = None
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt == retries - 1:
+                break
+            time.sleep(_BENCHMARK_TEMP_DIR_CLEANUP_DELAY_SEC)
+    if last_error is not None:
+        print(
+            f"[startup] tts benchmark cleanup skipped path={path} detail={last_error}",
+            flush=True,
+        )
 
 
 def _terminate_benchmark_process(process: subprocess.Popen[str]) -> None:

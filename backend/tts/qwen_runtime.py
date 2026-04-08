@@ -53,6 +53,7 @@ class QwenVoiceCloneTTS:
         ref_text_path: str,
         clone_voice_enabled: bool = True,
         device_mode: str = "auto",
+        precision_mode: str | None = None,
     ) -> None:
         self.model_path = model_path
         self.ref_audio_path = ref_audio_path
@@ -66,6 +67,7 @@ class QwenVoiceCloneTTS:
         self._prefer_stable_cuda_profile = False
         self.device = get_tts_device(device_mode)
         self.device_backend = backend_label_for_device(self.device)
+        self.precision_mode = precision_mode or self._default_precision_mode()
 
     @property
     def available(self) -> bool:
@@ -88,6 +90,7 @@ class QwenVoiceCloneTTS:
             if not self._should_retry_cuda_numeric_failure(exc):
                 raise
             self._prefer_stable_cuda_profile = True
+            self.precision_mode = "float32"
             self.unload()
             self._ensure_model()
             wavs, sr = self._generate_voice_clone(text, kwargs)
@@ -148,6 +151,7 @@ class QwenVoiceCloneTTS:
                     dtype=dtype,
                     attn_implementation=attn_implementation,
                 )
+                self.precision_mode = self._precision_mode_name(dtype)
                 break
             except Exception:
                 self._model = None
@@ -201,6 +205,9 @@ class QwenVoiceCloneTTS:
         )
 
     def _load_attempts(self, torch) -> list[tuple[str | dict[str, str], object, str]]:
+        requested_dtype = self._requested_dtype(torch)
+        if requested_dtype is not None:
+            return self._requested_precision_attempts(torch, requested_dtype)
         if self.device.startswith("cuda"):
             if self._prefer_stable_cuda_profile and platform.system() == "Windows":
                 return [
@@ -212,3 +219,31 @@ class QwenVoiceCloneTTS:
         if self.device == "mps":
             return [("mps", torch.float32, "sdpa"), ({"": "mps"}, torch.float32, "sdpa"), ("cpu", torch.float32, "sdpa")]
         return [("cpu", torch.float32, "sdpa")]
+
+    def _default_precision_mode(self) -> str:
+        if self.device.startswith("cuda"):
+            return "float16"
+        if self.device == "mps":
+            return "float32"
+        return "float32"
+
+    def _requested_dtype(self, torch):
+        return {
+            "float16": torch.float16,
+            "float32": torch.float32,
+            "bfloat16": torch.bfloat16,
+        }.get(self.precision_mode)
+
+    def _requested_precision_attempts(self, torch, dtype) -> list[tuple[str | dict[str, str], object, str]]:
+        if self.device.startswith("cuda"):
+            attn_implementation = "eager" if dtype == torch.float32 and platform.system() == "Windows" else "sdpa"
+            return [("cuda:0", dtype, attn_implementation), ("cpu", torch.float32, "sdpa")]
+        if self.device == "mps":
+            return [("mps", dtype, "sdpa"), ({"": "mps"}, dtype, "sdpa"), ("cpu", torch.float32, "sdpa")]
+        return [("cpu", dtype, "sdpa")]
+
+    def _precision_mode_name(self, dtype) -> str:
+        text = str(dtype)
+        if text.startswith("torch."):
+            return text.split(".", 1)[1]
+        return text

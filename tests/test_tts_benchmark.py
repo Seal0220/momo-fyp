@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from backend.tts import qwen_clone
 from backend.tts.model_profiles import resolve_tts_model_profile
 from backend.tts.qwen_clone import FishCloneTTS
 from backend.tts.semantic_runtime import SemanticBenchmarkResult
@@ -14,6 +15,7 @@ class DummyBenchmarkTTS(FishCloneTTS):
         clone_voice_enabled: bool = True,
         device_mode: str = "auto",
         semantic_dispatch_mode: str = "single",
+        precision_mode: str | None = None,
     ) -> None:
         self.model_path = model_path
         self.ref_audio_path = ref_audio_path
@@ -22,6 +24,7 @@ class DummyBenchmarkTTS(FishCloneTTS):
         self.device = device_mode
         self.device_backend = device_mode
         self.semantic_dispatch_mode = semantic_dispatch_mode
+        self.precision_mode = precision_mode or ("float16" if device_mode == "gpu" else "float32")
         self.model_profile = resolve_tts_model_profile(model_path)
         self.loaded = False
 
@@ -30,22 +33,23 @@ def test_benchmark_auto_profiles_logs_running_candidate(monkeypatch, capsys):
     model_path = "model/huggingface/hf_snapshots/fishaudio__fish-speech-1.5"
     plans = [
         SimpleNamespace(name="gpu", device_mode="gpu", semantic_dispatch_mode="single"),
-        SimpleNamespace(name="semantic-auto-gpu", device_mode="gpu", semantic_dispatch_mode="auto"),
     ]
     results = {
-        "gpu": SemanticBenchmarkResult(
-            name="gpu",
+        "gpu-float16": SemanticBenchmarkResult(
+            name="gpu-float16",
             device_mode="gpu",
             semantic_dispatch_mode="single",
             elapsed_ms=1200,
             ok=True,
+            precision_mode="float16",
         ),
-        "semantic-auto-gpu": SemanticBenchmarkResult(
-            name="semantic-auto-gpu",
+        "gpu-float32": SemanticBenchmarkResult(
+            name="gpu-float32",
             device_mode="gpu",
-            semantic_dispatch_mode="auto",
+            semantic_dispatch_mode="single",
             elapsed_ms=900,
             ok=True,
+            precision_mode="float32",
         ),
     }
 
@@ -64,9 +68,11 @@ def test_benchmark_auto_profiles_logs_running_candidate(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert selection is not None
-    assert selection.result.name == "semantic-auto-gpu"
-    assert "[startup] tts benchmark running candidate=gpu device=gpu semantic=single" in captured.out
-    assert "[startup] tts benchmark candidate=semantic-auto-gpu status=ok elapsed_ms=900 semantic=auto" in captured.out
+    assert selection.result.name == "gpu-float32"
+    assert selection.result.precision_mode == "float32"
+    assert selection.tts.precision_mode == "float32"
+    assert "[startup] tts benchmark running candidate=gpu-float16 device=gpu semantic=single precision=float16" in captured.out
+    assert "[startup] tts benchmark candidate=gpu-float32 status=ok elapsed_ms=900 semantic=single precision=float32" in captured.out
 
 
 def test_qwen_benchmark_auto_profiles_uses_device_only_candidates(monkeypatch):
@@ -78,19 +84,29 @@ def test_qwen_benchmark_auto_profiles_uses_device_only_candidates(monkeypatch):
     ]
     seen_plan_names: list[str] = []
     results = {
-        "gpu": SemanticBenchmarkResult(
-            name="gpu",
+        "gpu-float16": SemanticBenchmarkResult(
+            name="gpu-float16",
             device_mode="gpu",
             semantic_dispatch_mode="single",
             elapsed_ms=800,
             ok=True,
+            precision_mode="float16",
         ),
-        "cpu": SemanticBenchmarkResult(
-            name="cpu",
+        "gpu-float32": SemanticBenchmarkResult(
+            name="gpu-float32",
+            device_mode="gpu",
+            semantic_dispatch_mode="single",
+            elapsed_ms=700,
+            ok=True,
+            precision_mode="float32",
+        ),
+        "cpu-float32": SemanticBenchmarkResult(
+            name="cpu-float32",
             device_mode="cpu",
             semantic_dispatch_mode="single",
             elapsed_ms=1400,
             ok=True,
+            precision_mode="float32",
         ),
     }
 
@@ -110,5 +126,50 @@ def test_qwen_benchmark_auto_profiles_uses_device_only_candidates(monkeypatch):
     )
 
     assert selection is not None
-    assert selection.result.name == "gpu"
-    assert seen_plan_names == ["gpu", "cpu"]
+    assert selection.result.name == "gpu-float32"
+    assert selection.result.precision_mode == "float32"
+    assert selection.tts.precision_mode == "float32"
+    assert seen_plan_names == ["gpu-float16", "gpu-float32", "cpu-float32"]
+
+
+def test_cleanup_benchmark_temp_dir_retries_windows_cleanup(monkeypatch, tmp_path, capsys):
+    bench_dir = tmp_path / "momo_tts_bench_case"
+    bench_dir.mkdir()
+    (bench_dir / "stderr.log").write_text("busy", encoding="utf-8")
+
+    original_rmtree = qwen_clone.shutil.rmtree
+    attempts: list[object] = []
+
+    def flaky_rmtree(path):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        original_rmtree(path)
+
+    monkeypatch.setattr("backend.tts.qwen_clone.shutil.rmtree", flaky_rmtree)
+    monkeypatch.setattr("backend.tts.qwen_clone.time.sleep", lambda _: None)
+    monkeypatch.setattr("backend.tts.qwen_clone.os.name", "nt")
+
+    qwen_clone._cleanup_benchmark_temp_dir(bench_dir)
+
+    captured = capsys.readouterr()
+    assert len(attempts) == 2
+    assert not bench_dir.exists()
+    assert "tts benchmark cleanup skipped" not in captured.out
+
+
+def test_cleanup_benchmark_temp_dir_logs_and_swallows_failure(monkeypatch, tmp_path, capsys):
+    bench_dir = tmp_path / "momo_tts_bench_case"
+    bench_dir.mkdir()
+    monkeypatch.setattr(
+        "backend.tts.qwen_clone.shutil.rmtree",
+        lambda path: (_ for _ in ()).throw(PermissionError(32, "still busy")),
+    )
+    monkeypatch.setattr("backend.tts.qwen_clone.time.sleep", lambda _: None)
+    monkeypatch.setattr("backend.tts.qwen_clone.os.name", "nt")
+
+    qwen_clone._cleanup_benchmark_temp_dir(bench_dir)
+
+    captured = capsys.readouterr()
+    assert bench_dir.exists()
+    assert "[startup] tts benchmark cleanup skipped" in captured.out

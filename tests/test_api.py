@@ -626,12 +626,24 @@ def test_prepare_runtime_models_recovers_from_tts_oom_via_benchmark(monkeypatch)
                     "name": "cpu",
                     "elapsed_ms": 123,
                     "device_mode": "cpu",
+                    "precision_mode": "float32",
                     "ram_mb": 10.0,
                     "vram_mb": 0.0,
                 },
             )()
             self.results = [
-                type("Result", (), {"name": "cpu", "ok": True, "elapsed_ms": 123, "semantic_dispatch_mode": "single", "detail": ""})()
+                type(
+                    "Result",
+                    (),
+                    {
+                        "name": "cpu-float32",
+                        "ok": True,
+                        "elapsed_ms": 123,
+                        "semantic_dispatch_mode": "single",
+                        "precision_mode": "float32",
+                        "detail": "",
+                    },
+                )()
             ]
 
     brain.config.tts_device_mode = "gpu"
@@ -669,6 +681,7 @@ def test_select_tts_runtime_uses_benchmark_when_auto(monkeypatch):
         device_backend = "gpu"
         device = "cuda:0"
         semantic_dispatch_mode = "auto"
+        precision_mode = "float32"
 
         def __init__(self, *args, **kwargs):
             self.device_mode = kwargs.get("device_mode", "auto")
@@ -680,8 +693,25 @@ def test_select_tts_runtime_uses_benchmark_when_auto(monkeypatch):
     class FakeSelection:
         def __init__(self):
             self.tts = FakeTTS()
-            self.result = type("Result", (), {"name": "semantic-auto-gpu", "elapsed_ms": 321, "device_mode": "gpu"})()
-            self.results = [type("Result", (), {"name": "semantic-auto-gpu", "ok": True, "elapsed_ms": 321, "semantic_dispatch_mode": "auto", "detail": ""})()]
+            self.result = type(
+                "Result",
+                (),
+                {"name": "semantic-auto-gpu-float32", "elapsed_ms": 321, "device_mode": "gpu", "precision_mode": "float32"},
+            )()
+            self.results = [
+                type(
+                    "Result",
+                    (),
+                    {
+                        "name": "semantic-auto-gpu-float32",
+                        "ok": True,
+                        "elapsed_ms": 321,
+                        "semantic_dispatch_mode": "auto",
+                        "precision_mode": "float32",
+                        "detail": "",
+                    },
+                )()
+            ]
 
     brain.config.tts_device_mode = "auto"
     monkeypatch.setattr("backend.app.should_skip_tts_benchmark", lambda: False)
@@ -690,10 +720,12 @@ def test_select_tts_runtime_uses_benchmark_when_auto(monkeypatch):
     try:
         selected = brain._select_tts_runtime(selection_source="default")
         assert selected.semantic_dispatch_mode == "auto"
-        assert brain.tts_benchmark_selected == "semantic-auto-gpu"
+        assert selected.precision_mode == "float32"
+        assert brain.tts_benchmark_selected == "semantic-auto-gpu-float32"
         assert brain.config.tts_device_mode == "gpu"
         assert brain.tts_runtime.selection_source == "benchmark"
-        assert any("TTS benchmark selected semantic-auto-gpu" in item for item in brain.state.event_log)
+        assert brain.tts_runtime.precision_mode == "float32"
+        assert any("TTS benchmark selected semantic-auto-gpu-float32" in item for item in brain.state.event_log)
     finally:
         brain.tts = original_tts
         brain.config = original_config
@@ -711,6 +743,7 @@ def test_select_tts_runtime_skips_benchmark_when_requested(monkeypatch):
         device_backend = "cpu"
         device = "cpu"
         semantic_dispatch_mode = "single"
+        precision_mode = "float32"
 
         def __init__(self, *args, **kwargs):
             self.device_mode = kwargs.get("device_mode", "auto")
@@ -731,12 +764,13 @@ def test_select_tts_runtime_skips_benchmark_when_requested(monkeypatch):
 
 def test_benchmark_auto_profiles_selects_best_isolated_candidate(monkeypatch):
     class FakeTTS(QwenCloneTTS):
-        def __init__(self, *args, device_mode="auto", semantic_dispatch_mode="single", **kwargs):
+        def __init__(self, *args, device_mode="auto", semantic_dispatch_mode="single", precision_mode=None, **kwargs):
             self.model_path = "model"
             self.ref_audio_path = "ref.wav"
             self.ref_text_path = "ref.txt"
             self.clone_voice_enabled = kwargs.get("clone_voice_enabled", True)
             self.semantic_dispatch_mode = semantic_dispatch_mode
+            self.precision_mode = precision_mode or ("float16" if device_mode != "cpu" else "float32")
             self.loaded = False
             self.device = "cpu" if device_mode == "cpu" else "cuda:0"
             self.device_backend = "cpu" if device_mode == "cpu" else "gpu"
@@ -753,24 +787,81 @@ def test_benchmark_auto_profiles_selects_best_isolated_candidate(monkeypatch):
 
     def fake_runner(**kwargs):
         plan = kwargs["plan"]
-        if plan.name == "gpu":
-            return SemanticBenchmarkResult(name="gpu", device_mode="gpu", semantic_dispatch_mode="single", elapsed_ms=50, ok=False, detail="oom")
-        if plan.name == "semantic-auto-gpu":
-            return SemanticBenchmarkResult(name="semantic-auto-gpu", device_mode="gpu", semantic_dispatch_mode="auto", elapsed_ms=120, ok=True)
-        return SemanticBenchmarkResult(name="cpu", device_mode="cpu", semantic_dispatch_mode="single", elapsed_ms=900, ok=True)
+        if plan.name == "gpu-float16":
+            return SemanticBenchmarkResult(
+                name="gpu-float16",
+                device_mode="gpu",
+                semantic_dispatch_mode="single",
+                elapsed_ms=50,
+                ok=False,
+                precision_mode="float16",
+                detail="oom",
+            )
+        if plan.name == "gpu-float32":
+            return SemanticBenchmarkResult(
+                name="gpu-float32",
+                device_mode="gpu",
+                semantic_dispatch_mode="single",
+                elapsed_ms=90,
+                ok=True,
+                precision_mode="float32",
+            )
+        if plan.name == "semantic-auto-gpu-float16":
+            return SemanticBenchmarkResult(
+                name="semantic-auto-gpu-float16",
+                device_mode="gpu",
+                semantic_dispatch_mode="auto",
+                elapsed_ms=120,
+                ok=True,
+                precision_mode="float16",
+            )
+        if plan.name == "semantic-auto-gpu-float32":
+            return SemanticBenchmarkResult(
+                name="semantic-auto-gpu-float32",
+                device_mode="gpu",
+                semantic_dispatch_mode="auto",
+                elapsed_ms=150,
+                ok=True,
+                precision_mode="float32",
+            )
+        if plan.name == "cpu-bfloat16":
+            return SemanticBenchmarkResult(
+                name="cpu-bfloat16",
+                device_mode="cpu",
+                semantic_dispatch_mode="single",
+                elapsed_ms=1000,
+                ok=False,
+                precision_mode="bfloat16",
+                detail="unsupported",
+            )
+        return SemanticBenchmarkResult(
+            name="cpu-float32",
+            device_mode="cpu",
+            semantic_dispatch_mode="single",
+            elapsed_ms=900,
+            ok=True,
+            precision_mode="float32",
+        )
 
     monkeypatch.setattr(qwen_module, "_run_benchmark_candidate_subprocess", fake_runner)
 
     selection = FakeTTS.benchmark_auto_profiles("model", "ref.wav", "ref.txt", clone_voice_enabled=False)
 
     assert selection is not None
-    assert selection.result.name == "semantic-auto-gpu"
+    assert selection.result.name == "gpu-float32"
+    assert selection.result.precision_mode == "float32"
     assert selection.tts.device_backend == "gpu"
-    assert selection.tts.semantic_dispatch_mode == "auto"
+    assert selection.tts.semantic_dispatch_mode == "single"
+    assert selection.tts.precision_mode == "float32"
 
 
 def test_benchmark_candidate_subprocess_terminates_when_shutdown_requested(monkeypatch):
-    plan = SemanticRuntimePlan(name="gpu", device_mode="gpu", semantic_dispatch_mode="single")
+    plan = qwen_module.TTSBenchmarkCandidate(
+        name="gpu-float16",
+        device_mode="gpu",
+        semantic_dispatch_mode="single",
+        precision_mode="float16",
+    )
     fake_process = type("FakeProcess", (), {"pid": 4321, "returncode": None})()
 
     def fake_poll():

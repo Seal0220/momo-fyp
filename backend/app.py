@@ -158,7 +158,7 @@ class Brain:
             self.config.tts_device_mode = selected_mode
             self.tts_benchmark_selected = selection.result.name
             self.tts_benchmark_results = [
-                f"{item.name}:{'ok' if item.ok else 'error'}:{item.elapsed_ms}:{item.semantic_dispatch_mode}"
+                f"{item.name}:{'ok' if item.ok else 'error'}:{item.elapsed_ms}:{item.semantic_dispatch_mode}:{item.precision_mode}"
                 + (f":{item.detail}" if item.detail else "")
                 for item in selection.results
             ]
@@ -168,6 +168,7 @@ class Brain:
                 backend=getattr(selection.tts, "device_backend", None),
                 selection_source="benchmark",
                 semantic_dispatch_mode=getattr(selection.tts, "semantic_dispatch_mode", None),
+                precision_mode=getattr(selection.tts, "precision_mode", getattr(selection.result, "precision_mode", None)),
                 ram_mb=getattr(selection.result, "ram_mb", None),
                 vram_mb=getattr(selection.result, "vram_mb", None),
             )
@@ -188,6 +189,7 @@ class Brain:
             backend=getattr(tts, "device_backend", None),
             selection_source=selection_source,
             semantic_dispatch_mode=getattr(tts, "semantic_dispatch_mode", None),
+            precision_mode=getattr(tts, "precision_mode", None),
         )
         return tts
 

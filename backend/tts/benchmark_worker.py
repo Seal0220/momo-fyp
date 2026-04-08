@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device-mode", required=True)
     parser.add_argument("--plan-name", required=True)
     parser.add_argument("--semantic-dispatch-mode", required=True)
+    parser.add_argument("--precision-mode", required=True)
     parser.add_argument("--sample-text", required=True)
     parser.add_argument("--result-path", required=True)
     parser.add_argument("--clone-voice-enabled", action="store_true")
@@ -30,6 +31,7 @@ def main(argv: list[str] | None = None) -> None:
         device_mode=args.device_mode,
         plan_name=args.plan_name,
         semantic_dispatch_mode=args.semantic_dispatch_mode,
+        precision_mode=args.precision_mode,
         clone_voice_enabled=args.clone_voice_enabled,
         sample_text=args.sample_text,
     )
@@ -46,6 +48,7 @@ def run_candidate(
     device_mode: str,
     plan_name: str,
     semantic_dispatch_mode: str,
+    precision_mode: str,
     clone_voice_enabled: bool,
     sample_text: str,
 ) -> SemanticBenchmarkResult:
@@ -56,6 +59,7 @@ def run_candidate(
         clone_voice_enabled=clone_voice_enabled,
         device_mode=device_mode,
         semantic_dispatch_mode=semantic_dispatch_mode,
+        precision_mode=precision_mode,
     )
     started = time.monotonic()
     before = capture_process_footprint(candidate.device)
@@ -74,6 +78,7 @@ def run_candidate(
             semantic_dispatch_mode=candidate.semantic_dispatch_mode,
             elapsed_ms=int((time.monotonic() - started) * 1000),
             ok=True,
+            precision_mode=candidate.precision_mode,
             ram_mb=ram_mb,
             vram_mb=vram_mb,
         )
@@ -84,6 +89,7 @@ def run_candidate(
             semantic_dispatch_mode=semantic_dispatch_mode,
             elapsed_ms=-1,
             ok=False,
+            precision_mode=precision_mode,
             detail=str(exc),
         )
 
