@@ -12,11 +12,12 @@ from backend.types import RuntimeConfig
 ULTRALYTICS_ASSET_BASE = "https://github.com/ultralytics/assets/releases/latest/download"
 
 
-def ensure_runtime_models(config: RuntimeConfig) -> list[dict[str, str]]:
+def ensure_runtime_models(config: RuntimeConfig, *, vision_only: bool = False) -> list[dict[str, str]]:
     checks: list[dict[str, str]] = []
     checks.append(_ensure_yolo_asset(config.yolo_model_path))
     checks.append(_ensure_yolo_asset(config.yolo_pose_model_path))
-    checks.append(_ensure_tts_model(config.tts_model_path))
+    if not vision_only:
+        checks.append(_ensure_tts_model(config.tts_model_path))
     return checks
 
 

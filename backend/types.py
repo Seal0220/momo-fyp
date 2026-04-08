@@ -172,7 +172,6 @@ class RuntimeConfig(BaseModel):
     camera_fps: int = 30
     camera_mirror_preview: bool = False
     camera_flip_vertical: bool = True
-    yolo_only_mode: bool = False
     yolo_model_path: str = "model/yolo/yolo26n.pt"
     yolo_pose_model_path: str = "model/yolo/yolo26n-pose.pt"
     yolo_device_mode: str = "auto"

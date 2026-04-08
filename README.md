@@ -102,6 +102,12 @@ uv run python -m backend.app --reload
 uv run python -m backend.app --skip-tts-benchmark
 ```
 
+如只要跑 YOLO / vision，完全不要在啟動時載入 TTS 與 Ollama：
+
+```bash
+uv run python -m backend.app --yolo-only
+```
+
 前端：
 
 ```bash
@@ -166,6 +172,7 @@ npm run build
   - 3. 程式原始 default
 - 當 `auto` benchmark 選出結果後，runtime 會把目前生效的 `TTS Device` 視為 benchmark 選中的 device，所以 UI 顯示的會是實際生效值，不會一直停在 `auto`。
 - `--skip-tts-benchmark` 只會跳過這段啟動 benchmark，直接使用目前 config 的 `TTS Device`。
+- `--yolo-only` 會讓後端從啟動開始就跳過 TTS model bootstrap、TTS preload、Ollama warmup、Ollama runtime status refresh，僅保留 vision / YOLO / servo 路徑。
 - UI 頂部的 YOLO / TTS / Ollama device 與 RAM / VRAM 會即時顯示目前生效裝置。
   - Ollama 的數字來自它自己的 runtime 回報。
   - YOLO / TTS 的數字是本程序在模型 warmup / preload 時量到的 component footprint，屬於近似值。

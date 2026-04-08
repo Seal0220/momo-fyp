@@ -218,7 +218,7 @@ def test_generate_tracking_line_uses_person_crop_mode_when_enabled():
 
 
 def test_generate_tracking_line_skips_llm_and_tts_when_yolo_only_mode_enabled():
-    original_config = brain.config.model_copy(deep=True)
+    original_mode = brain.yolo_only_mode
     original_generate = brain._generate_with_ollama
     original_speak = brain._speak_line
     original_stage = brain.state.pipeline.stage
@@ -229,7 +229,7 @@ def test_generate_tracking_line_skips_llm_and_tts_when_yolo_only_mode_enabled():
     async def fail_speak(*args, **kwargs):
         raise AssertionError("TTS should be skipped in YOLO-only mode")
 
-    brain.config = original_config.model_copy(update={"yolo_only_mode": True})
+    brain.yolo_only_mode = True
     brain._generate_with_ollama = fail_generate
     brain._speak_line = fail_speak
 
@@ -237,7 +237,7 @@ def test_generate_tracking_line_skips_llm_and_tts_when_yolo_only_mode_enabled():
         asyncio.run(brain.generate_tracking_line())
         assert brain.state.pipeline.stage == PipelineStage.IDLE
     finally:
-        brain.config = original_config
+        brain.yolo_only_mode = original_mode
         brain._generate_with_ollama = original_generate
         brain._speak_line = original_speak
         brain.state.set_pipeline_stage(original_stage)
@@ -305,17 +305,25 @@ def test_update_config_returns_apply_checks():
     assert isinstance(payload["apply_checks"], list)
 
 
-def test_update_config_accepts_yolo_only_mode():
-    original_config = brain.config.model_copy(deep=True)
+def test_get_ollama_models_skips_remote_call_in_yolo_only_mode():
+    original_mode = brain.yolo_only_mode
+
+    async def fail_list_models(self):
+        raise AssertionError("Ollama should not be queried in YOLO-only mode")
+
+    brain.yolo_only_mode = True
     try:
-        brain.config = original_config.model_copy(update={"tts_reference_mode": "fixed"})
-        response = client.post("/api/config", json={"yolo_only_mode": True})
+        from backend.llm.ollama_client import OllamaClient
+
+        original = OllamaClient.list_models
+        OllamaClient.list_models = fail_list_models
+        response = client.get("/api/ollama/models")
         assert response.status_code == 200
         payload = response.json()
-        assert payload["applied_config"]["yolo_only_mode"] is True
-        assert any(item["component"] == "pipeline" for item in payload["apply_checks"])
+        assert payload["models"] == [brain.config.ollama_model]
     finally:
-        brain.config = original_config
+        brain.yolo_only_mode = original_mode
+        OllamaClient.list_models = original
 
 
 def test_update_config_validation_failure_returns_feedback():
@@ -1046,6 +1054,54 @@ def test_main_skip_tts_benchmark_sets_env_and_runs_uvicorn(monkeypatch):
             os.environ.pop("MOMO_SKIP_TTS_BENCHMARK", None)
         else:
             os.environ["MOMO_SKIP_TTS_BENCHMARK"] = original
+
+
+def test_main_yolo_only_sets_env_and_runs_uvicorn(monkeypatch):
+    original = os.environ.get("MOMO_YOLO_ONLY")
+    called: dict[str, object] = {}
+
+    def fake_run(app_target: str, **kwargs):
+        called["app_target"] = app_target
+        called["kwargs"] = kwargs
+
+    monkeypatch.setattr(app_module.uvicorn, "run", fake_run)
+    try:
+        app_module.main(["--yolo-only", "--host", "0.0.0.0", "--port", "9100"])
+        assert os.environ["MOMO_YOLO_ONLY"] == "1"
+        assert called["app_target"] == "backend.app:app"
+        assert called["kwargs"]["host"] == "0.0.0.0"
+        assert called["kwargs"]["port"] == 9100
+    finally:
+        if original is None:
+            os.environ.pop("MOMO_YOLO_ONLY", None)
+        else:
+            os.environ["MOMO_YOLO_ONLY"] = original
+
+
+def test_brain_starts_with_tts_and_ollama_disabled_in_yolo_only_mode(monkeypatch):
+    class FakeSerial:
+        connected = False
+
+        def __init__(self, port: str, baud_rate: int):
+            self.port = port
+            self.baud_rate = baud_rate
+
+        def close(self):
+            return None
+
+        def snapshot(self):
+            from backend.types import SerialMonitorSnapshot
+
+            return SerialMonitorSnapshot()
+
+    monkeypatch.setenv("MOMO_YOLO_ONLY", "1")
+    monkeypatch.setattr(app_module, "ESP32Link", FakeSerial)
+
+    test_brain = app_module.Brain()
+
+    assert test_brain.yolo_only_mode is True
+    assert test_brain.tts.device_backend == "disabled"
+    assert test_brain.ollama_runtime.backend == "disabled"
 
 
 def test_get_config_reflects_latest_applied_value():

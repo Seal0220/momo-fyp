@@ -59,17 +59,53 @@ REFERENCE_PAIR_NAME_TO_TAG = {value: key for key, value in REFERENCE_PAIR_TAG_TO
 RUNTIME_STATUS_REFRESH_INTERVAL_SEC = 2.0
 
 
+class DisabledTTS:
+    def __init__(self) -> None:
+        self.loaded = False
+        self.device = "disabled"
+        self.device_backend = "disabled"
+        self.semantic_dispatch_mode = None
+        self.precision_mode = None
+        self.model_profile = resolve_tts_model_profile(RuntimeConfig().tts_model_path)
+
+    def preload(self) -> None:
+        return None
+
+    def unload(self) -> None:
+        return None
+
+    def synthesize(self, text: str, output_path: str, *, request_overrides: dict | None = None) -> str:
+        raise RuntimeError("TTS is disabled in YOLO-only mode")
+
+    def set_reference_paths(self, ref_audio_path: str, ref_text_path: str) -> None:
+        return None
+
+
+def should_run_yolo_only_mode() -> bool:
+    return os.getenv("MOMO_YOLO_ONLY") == "1"
+
+
 class Brain:
     def __init__(self) -> None:
         self.config = RuntimeConfig()
+        self.yolo_only_mode = should_run_yolo_only_mode()
         self.state = RuntimeState()
         self.prompts = PromptBuilder("resource/md/system-persona_tracking.md", "resource/md/system-persona_idle.md")
         self.resources = ResourceManager("tmp")
         self.audio = AudioPlayer()
         self.tts_benchmark_selected: str | None = None
         self.tts_benchmark_results: list[str] = []
-        self.tts_runtime = RuntimeComponentStats()
-        self.tts = self._build_tts_runtime(selection_source="default")
+        if self.yolo_only_mode:
+            self.tts_runtime = RuntimeComponentStats(
+                requested_mode="disabled",
+                effective_device="disabled",
+                backend="disabled",
+                selection_source="startup-flag",
+            )
+            self.tts = DisabledTTS()
+        else:
+            self.tts_runtime = RuntimeComponentStats()
+            self.tts = self._build_tts_runtime(selection_source="default")
         self.serial = ESP32Link(self.config.serial_port, self.config.serial_baud_rate)
         self.vision = VisionRuntime(self.config)
         self.yolo_person_runtime = RuntimeComponentStats(
@@ -85,10 +121,10 @@ class Brain:
             selection_source="default",
         )
         self.ollama_runtime = RuntimeComponentStats(
-            requested_mode=self.config.ollama_device_mode,
-            effective_device=self._expected_ollama_backend_label(expected_accelerator_label()),
-            backend=self._expected_ollama_backend_label(expected_accelerator_label()),
-            selection_source="default",
+            requested_mode="disabled" if self.yolo_only_mode else self.config.ollama_device_mode,
+            effective_device="disabled" if self.yolo_only_mode else self._expected_ollama_backend_label(expected_accelerator_label()),
+            backend="disabled" if self.yolo_only_mode else self._expected_ollama_backend_label(expected_accelerator_label()),
+            selection_source="startup-flag" if self.yolo_only_mode else "default",
         )
         self.ollama_connected = False
         self.history: deque[str] = deque(maxlen=10)
@@ -105,9 +141,13 @@ class Brain:
     async def start(self) -> None:
         clear_shutdown_request()
         if should_prepare_models():
-            await asyncio.to_thread(self._prepare_runtime_models)
+            if self.yolo_only_mode:
+                await asyncio.to_thread(self._prepare_vision_models_only)
+            else:
+                await asyncio.to_thread(self._prepare_runtime_models)
         await self._print_startup_diagnostics()
-        await self.refresh_runtime_status()
+        if not self.yolo_only_mode:
+            await self.refresh_runtime_status()
         self.vision.start()
         self.background_tasks = [
             asyncio.create_task(self.vision_loop()),
@@ -132,6 +172,24 @@ class Brain:
         except Exception as exc:
             if not self._recover_tts_from_oom(exc):
                 self.state.event_log = [f"TTS preload failed: {exc}", *self.state.event_log][:20]
+        self.vision = VisionRuntime(self.config)
+        person_device = getattr(getattr(self.vision, "detector", None), "device", None)
+        pose_device = getattr(getattr(self.vision, "pose", None), "device", None)
+        self.yolo_person_runtime = RuntimeComponentStats(
+            requested_mode=self.config.yolo_device_mode,
+            effective_device=person_device,
+            backend=backend_label_for_device(person_device or "cpu") if person_device else None,
+            selection_source="default",
+        )
+        self.yolo_pose_runtime = RuntimeComponentStats(
+            requested_mode=self.config.yolo_device_mode,
+            effective_device=pose_device,
+            backend=backend_label_for_device(pose_device or "cpu") if pose_device else None,
+            selection_source="default",
+        )
+
+    def _prepare_vision_models_only(self) -> None:
+        ensure_runtime_models(self.config, vision_only=True)
         self.vision = VisionRuntime(self.config)
         person_device = getattr(getattr(self.vision, "detector", None), "device", None)
         pose_device = getattr(getattr(self.vision, "pose", None), "device", None)
@@ -288,7 +346,6 @@ class Brain:
 
     async def _collect_startup_diagnostics(self) -> list[str]:
         expected = expected_accelerator_label()
-        tts_expected = expected_tts_backend_label(self.config.tts_device_mode)
         vision_expected = expected_vision_backend_label(self.config.yolo_device_mode)
         lines = [f"[startup] expected_accelerator={expected}", f"[startup] expected_vision_backend={vision_expected}"]
         try:
@@ -301,6 +358,11 @@ class Brain:
         except Exception as exc:
             lines.append(f"[startup] yolo error={exc}")
 
+        if self.yolo_only_mode:
+            lines.append("[startup] yolo_only=true tts=disabled ollama=disabled")
+            return lines
+
+        tts_expected = expected_tts_backend_label(self.config.tts_device_mode)
         lines.append(
             f"[startup] tts backend={self.tts.device_backend} target={tts_expected} loaded={self.tts.loaded} ok={self.tts.device_backend == tts_expected}"
         )
@@ -377,6 +439,15 @@ class Brain:
 
     async def refresh_runtime_status(self) -> None:
         self.serial.refresh_connection()
+        if self.yolo_only_mode:
+            self.ollama_connected = False
+            self.ollama_runtime = RuntimeComponentStats(
+                requested_mode="disabled",
+                effective_device="disabled",
+                backend="disabled",
+                selection_source="startup-flag",
+            )
+            return
         await self._refresh_ollama_runtime_stats()
 
     async def _refresh_ollama_runtime_stats(self) -> None:
@@ -581,7 +652,7 @@ class Brain:
         return round(min(max(calibrated, min_deg), max_deg), 2)
 
     def _yolo_only_mode_enabled(self) -> bool:
-        return bool(self.config.yolo_only_mode)
+        return self.yolo_only_mode
 
     async def _maybe_generate_tracking_line(self) -> None:
         if self._yolo_only_mode_enabled():
@@ -1157,15 +1228,6 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
     if changed & {"yolo_model_path", "yolo_pose_model_path", "yolo_device_mode"}:
         checks.append({"component": "vision-model", "status": "ok", "message": f"YOLO model paths updated and verified. Device mode is {config.yolo_device_mode}."})
 
-    if changed & {"yolo_only_mode"}:
-        checks.append(
-            {
-                "component": "pipeline",
-                "status": "ok",
-                "message": "YOLO-only mode enabled. Automatic LLM and TTS generation are disabled." if config.yolo_only_mode else "YOLO-only mode disabled. Automatic LLM and TTS generation restored.",
-            }
-        )
-
     if changed & {"ollama_base_url", "ollama_model", "ollama_device_mode", "ollama_timeout_sec", "llm_use_person_crop"}:
         client = OllamaClient(config.ollama_base_url, min(config.ollama_timeout_sec, 15), config.ollama_device_mode)
         try:
@@ -1438,6 +1500,8 @@ async def get_audio_devices():
 
 @app.get("/api/ollama/models")
 async def get_ollama_models():
+    if brain.yolo_only_mode:
+        return {"models": [brain.config.ollama_model]}
     client = OllamaClient(brain.config.ollama_base_url, brain.config.ollama_timeout_sec, brain.config.ollama_device_mode)
     try:
         models = await client.list_models()
@@ -1486,11 +1550,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=int(os.getenv("MOMO_PORT", "8000")))
     parser.add_argument("--reload", action="store_true")
     parser.add_argument(
+        "--yolo-only",
+        action="store_true",
+        help="Start in vision-only mode. Skip Ollama and TTS loading, warmup, and runtime use.",
+    )
+    parser.add_argument(
         "--skip-tts-benchmark",
         action="store_true",
         help="Skip startup TTS benchmark auto-selection and use the configured TTS device mode directly.",
     )
     args = parser.parse_args(argv)
+    if args.yolo_only:
+        os.environ["MOMO_YOLO_ONLY"] = "1"
     if args.skip_tts_benchmark:
         os.environ["MOMO_SKIP_TTS_BENCHMARK"] = "1"
     uvicorn.run("backend.app:app", host=args.host, port=args.port, reload=args.reload)
