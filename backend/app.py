@@ -529,23 +529,40 @@ class Brain:
             left_limits=(self.config.servo_left_min_deg, self.config.servo_left_max_deg),
             right_limits=(self.config.servo_right_min_deg, self.config.servo_right_max_deg),
         )
-        if self.config.servo_output_inverted:
-            servo.left_deg = round(
-                min(
-                    max((2 * self.config.servo_left_zero_deg) - servo.left_deg, self.config.servo_left_min_deg),
-                    self.config.servo_left_max_deg,
-                ),
-                2,
-            )
-            servo.right_deg = round(
-                min(
-                    max((2 * self.config.servo_right_zero_deg) - servo.right_deg, self.config.servo_right_min_deg),
-                    self.config.servo_right_max_deg,
-                ),
-                2,
-            )
+        servo.left_deg = self._apply_servo_output_calibration(
+            angle=servo.left_deg,
+            zero_deg=self.config.servo_left_zero_deg,
+            min_deg=self.config.servo_left_min_deg,
+            max_deg=self.config.servo_left_max_deg,
+            gain=self.config.servo_left_gain,
+            trim_deg=self.config.servo_left_trim_deg,
+        )
+        servo.right_deg = self._apply_servo_output_calibration(
+            angle=servo.right_deg,
+            zero_deg=self.config.servo_right_zero_deg,
+            min_deg=self.config.servo_right_min_deg,
+            max_deg=self.config.servo_right_max_deg,
+            gain=self.config.servo_right_gain,
+            trim_deg=self.config.servo_right_trim_deg,
+        )
         servo.tracking_source = tracking_source
         return servo
+
+    def _apply_servo_output_calibration(
+        self,
+        *,
+        angle: float,
+        zero_deg: float,
+        min_deg: float,
+        max_deg: float,
+        gain: float,
+        trim_deg: float,
+    ) -> float:
+        delta = angle - zero_deg
+        if self.config.servo_output_inverted:
+            delta = -delta
+        calibrated = zero_deg + (delta * gain) + trim_deg
+        return round(min(max(calibrated, min_deg), max_deg), 2)
 
     async def _maybe_generate_tracking_line(self) -> None:
         if self.audio.is_playing() or self.generation_lock.locked():
@@ -1171,6 +1188,10 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
         "servo_left_zero_deg",
         "servo_right_zero_deg",
         "servo_output_inverted",
+        "servo_left_trim_deg",
+        "servo_right_trim_deg",
+        "servo_left_gain",
+        "servo_right_gain",
         "servo_eye_spacing_cm",
         "servo_left_min_deg",
         "servo_left_max_deg",

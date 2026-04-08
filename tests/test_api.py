@@ -308,6 +308,32 @@ def test_update_config_accepts_servo_output_inverted():
         brain.serial = original_serial
 
 
+def test_update_config_accepts_servo_trim_and_gain():
+    original_config = brain.config.model_copy(deep=True)
+    original_serial = brain.serial
+    try:
+        response = client.post(
+            "/api/config",
+            json={
+                "servo_left_trim_deg": 2.5,
+                "servo_right_trim_deg": -1.5,
+                "servo_left_gain": 1.2,
+                "servo_right_gain": 0.8,
+            },
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["validation_errors"] == []
+        assert payload["applied_config"]["servo_left_trim_deg"] == 2.5
+        assert payload["applied_config"]["servo_right_trim_deg"] == -1.5
+        assert payload["applied_config"]["servo_left_gain"] == 1.2
+        assert payload["applied_config"]["servo_right_gain"] == 0.8
+    finally:
+        brain.config = original_config
+        brain.serial.close()
+        brain.serial = original_serial
+
+
 def test_update_config_tts_path_no_server_error():
     response = client.post(
         "/api/config",
@@ -807,6 +833,7 @@ def test_get_config_reflects_latest_applied_value():
 
 def test_status_snapshot_uses_latest_vision_servo_angles():
     original_get_snapshot = brain.vision.get_snapshot
+    original_config = brain.config.model_copy(deep=True)
     brain.state.servo = ServoTelemetry(left_deg=83.5, right_deg=97.25, tracking_source="eye_midpoint")
 
     class FakeVisionState:
@@ -816,9 +843,21 @@ def test_status_snapshot_uses_latest_vision_servo_angles():
         frame_shape = None
         target_seen_at = None
 
+    brain.config = original_config.model_copy(
+        update={
+            "servo_left_zero_deg": 90.0,
+            "servo_right_zero_deg": 90.0,
+            "servo_output_inverted": False,
+            "servo_left_trim_deg": 0.0,
+            "servo_right_trim_deg": 0.0,
+            "servo_left_gain": 1.0,
+            "servo_right_gain": 1.0,
+        }
+    )
     brain.vision.get_snapshot = lambda: FakeVisionState()
     response = client.get("/api/status")
     brain.vision.get_snapshot = original_get_snapshot
+    brain.config = original_config
     assert response.status_code == 200
     payload = response.json()
     assert payload["servo"]["left_deg"] > 90
@@ -900,6 +939,7 @@ def test_snapshot_recomputes_servo_from_latest_vision(monkeypatch):
 
     original_snapshot = brain.vision.get_snapshot
     original_state_servo = brain.state.servo
+    original_config = brain.config.model_copy(deep=True)
 
     brain.state.servo = ServoTelemetry(left_deg=10.0, right_deg=20.0, tracking_source="stale")
 
@@ -917,6 +957,17 @@ def test_snapshot_recomputes_servo_from_latest_vision(monkeypatch):
             target_seen_at=None,
         )
 
+    brain.config = original_config.model_copy(
+        update={
+            "servo_left_zero_deg": 90.0,
+            "servo_right_zero_deg": 90.0,
+            "servo_output_inverted": False,
+            "servo_left_trim_deg": 0.0,
+            "servo_right_trim_deg": 0.0,
+            "servo_left_gain": 1.0,
+            "servo_right_gain": 1.0,
+        }
+    )
     brain.vision.get_snapshot = fake_snapshot
     try:
         snap = brain.snapshot()
@@ -926,6 +977,7 @@ def test_snapshot_recomputes_servo_from_latest_vision(monkeypatch):
     finally:
         brain.vision.get_snapshot = original_snapshot
         brain.state.servo = original_state_servo
+        brain.config = original_config
 
 
 def test_compute_servo_can_invert_output():
@@ -954,6 +1006,52 @@ def test_compute_servo_can_invert_output():
 
         assert inverted.left_deg == round((2 * 90.0) - normal.left_deg, 2)
         assert inverted.right_deg == round((2 * 90.0) - normal.right_deg, 2)
+    finally:
+        brain.config = original_config
+
+
+def test_compute_servo_trim_and_gain_affect_output():
+    original_config = brain.config.model_copy(deep=True)
+    try:
+        features = AudienceFeatures(
+            track_id=1,
+            bbox_area_ratio=0.35,
+            center_x_norm=0.5,
+            eye_midpoint=[0.72, 0.5],
+        )
+        brain.config = original_config.model_copy(
+            update={
+                "servo_left_zero_deg": 90.0,
+                "servo_right_zero_deg": 90.0,
+                "servo_output_inverted": False,
+                "servo_left_trim_deg": 0.0,
+                "servo_right_trim_deg": 0.0,
+                "servo_left_gain": 1.0,
+                "servo_right_gain": 1.0,
+                "servo_left_min_deg": 45.0,
+                "servo_left_max_deg": 135.0,
+                "servo_right_min_deg": 45.0,
+                "servo_right_max_deg": 135.0,
+            }
+        )
+        baseline = brain._compute_servo_from_features(features, "eye_midpoint")
+        brain.config = brain.config.model_copy(
+            update={
+                "servo_left_trim_deg": 2.5,
+                "servo_right_trim_deg": -1.5,
+                "servo_left_gain": 1.5,
+                "servo_right_gain": 0.5,
+            }
+        )
+        adjusted = brain._compute_servo_from_features(features, "eye_midpoint")
+
+        expected_left = round(90.0 + ((baseline.left_deg - 90.0) * 1.5) + 2.5, 2)
+        expected_right = round(90.0 + ((baseline.right_deg - 90.0) * 0.5) - 1.5, 2)
+
+        assert adjusted.left_deg == expected_left
+        assert adjusted.right_deg == expected_right
+        assert adjusted.left_deg != baseline.left_deg
+        assert adjusted.right_deg != baseline.right_deg
     finally:
         brain.config = original_config
 

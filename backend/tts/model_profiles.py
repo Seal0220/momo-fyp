@@ -165,7 +165,7 @@ QWEN3_TTS_0_6B_BASE_PROFILE = TTSModelProfile(
     emotion_tags=(),
     emotion_prompt_label="",
     supports_structured_emotion=False,
-    supports_startup_benchmark=False,
+    supports_startup_benchmark=True,
 )
 
 QWEN3_TTS_1_7B_BASE_PROFILE = TTSModelProfile(
@@ -191,7 +191,7 @@ QWEN3_TTS_1_7B_BASE_PROFILE = TTSModelProfile(
     emotion_tags=(),
     emotion_prompt_label="",
     supports_structured_emotion=False,
-    supports_startup_benchmark=False,
+    supports_startup_benchmark=True,
 )
 
 DEFAULT_TTS_MODEL_PROFILE = FISH_SPEECH_V1_5_PROFILE

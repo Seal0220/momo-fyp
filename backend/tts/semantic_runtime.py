@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import platform
 import queue
 import threading
 import traceback
@@ -32,6 +33,13 @@ class SemanticBenchmarkResult:
     vram_mb: float | None = None
 
 
+@dataclass(frozen=True)
+class SemanticBenchmarkOption:
+    name: str
+    plan: SemanticRuntimePlan | None
+    skip_reason: str = ""
+
+
 def accelerate_available() -> bool:
     try:
         import accelerate  # noqa: F401
@@ -49,22 +57,64 @@ def resolve_accelerator_mode() -> str | None:
     return None
 
 
-def benchmark_plans_for_current_host() -> list[SemanticRuntimePlan]:
+def benchmark_options_for_current_host() -> list[SemanticBenchmarkOption]:
     accelerator = resolve_accelerator_mode()
-    if not accelerator:
-        return [SemanticRuntimePlan(name="cpu", device_mode="cpu", semantic_dispatch_mode="single")]
+    accelerator_option = "mps" if platform.system() == "Darwin" else "gpu"
+    options: list[SemanticBenchmarkOption] = []
 
-    plans = [SemanticRuntimePlan(name=accelerator, device_mode=accelerator, semantic_dispatch_mode="single")]
-    if accelerate_available():
-        plans.append(
-            SemanticRuntimePlan(
-                name=f"semantic-auto-{accelerator}",
-                device_mode=accelerator,
-                semantic_dispatch_mode="auto",
+    if accelerator:
+        options.append(
+            SemanticBenchmarkOption(
+                name=accelerator,
+                plan=SemanticRuntimePlan(name=accelerator, device_mode=accelerator, semantic_dispatch_mode="single"),
             )
         )
-    plans.append(SemanticRuntimePlan(name="cpu", device_mode="cpu", semantic_dispatch_mode="single"))
-    return plans
+        if accelerate_available():
+            options.append(
+                SemanticBenchmarkOption(
+                    name="auto",
+                    plan=SemanticRuntimePlan(
+                        name=f"semantic-auto-{accelerator}",
+                        device_mode=accelerator,
+                        semantic_dispatch_mode="auto",
+                    ),
+                )
+            )
+        else:
+            options.append(
+                SemanticBenchmarkOption(
+                    name="auto",
+                    plan=None,
+                    skip_reason="accelerate is not installed, so semantic auto dispatch is unavailable",
+                )
+            )
+    else:
+        options.append(
+            SemanticBenchmarkOption(
+                name=accelerator_option,
+                plan=None,
+                skip_reason=f"{accelerator_option} backend is not available on this host",
+            )
+        )
+        options.append(
+            SemanticBenchmarkOption(
+                name="auto",
+                plan=None,
+                skip_reason=f"auto benchmark requires an available {accelerator_option} backend",
+            )
+        )
+
+    options.append(
+        SemanticBenchmarkOption(
+            name="cpu",
+            plan=SemanticRuntimePlan(name="cpu", device_mode="cpu", semantic_dispatch_mode="single"),
+        )
+    )
+    return options
+
+
+def benchmark_plans_for_current_host() -> list[SemanticRuntimePlan]:
+    return [item.plan for item in benchmark_options_for_current_host() if item.plan is not None]
 
 
 def make_semantic_queue(

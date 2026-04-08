@@ -291,6 +291,8 @@ class FishCloneTTS:
             )
             return TTSAutoBenchmarkSelection(tts=tts, result=result, results=[result])
         plans = benchmark_plans_for_current_host()
+        if profile.key.startswith("qwen3-tts"):
+            plans = [plan for plan in plans if plan.semantic_dispatch_mode == "single"]
         if not plans:
             return None
         results: list[SemanticBenchmarkResult] = []

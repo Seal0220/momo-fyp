@@ -70,6 +70,10 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str | None]] = {
     "servo_left_zero_deg": ("Left Zero", "Neutral angle for the left eye servo.", "0-180"),
     "servo_right_zero_deg": ("Right Zero", "Neutral angle for the right eye servo.", "0-180"),
     "servo_output_inverted": ("Invert Output", "Mirror left and right servo output around each servo zero angle.", None),
+    "servo_left_trim_deg": ("Left Trim", "Fixed angle offset applied after left servo scaling.", "-90-90"),
+    "servo_right_trim_deg": ("Right Trim", "Fixed angle offset applied after right servo scaling.", "-90-90"),
+    "servo_left_gain": ("Left Gain", "Multiplier applied to the left servo delta from its zero angle.", ">0"),
+    "servo_right_gain": ("Right Gain", "Multiplier applied to the right servo delta from its zero angle.", ">0"),
     "servo_eye_spacing_cm": ("Eye Spacing", "Distance between the two servo eyes used by the aiming geometry.", ">=1"),
     "servo_left_min_deg": ("Left Min", "Left servo lower clamp.", "0-180"),
     "servo_left_max_deg": ("Left Max", "Left servo upper clamp.", "0-180"),
@@ -133,6 +137,10 @@ FIELD_GROUPS: dict[str, str] = {
     "servo_left_zero_deg": "servo",
     "servo_right_zero_deg": "servo",
     "servo_output_inverted": "servo",
+    "servo_left_trim_deg": "servo",
+    "servo_right_trim_deg": "servo",
+    "servo_left_gain": "servo",
+    "servo_right_gain": "servo",
     "servo_eye_spacing_cm": "servo",
     "servo_left_min_deg": "servo",
     "servo_left_max_deg": "servo",
@@ -235,6 +243,10 @@ def validate_runtime_config(candidate: RuntimeConfig) -> list[str]:
         errors.append("tts_reference_mode must be one of ['fixed', 'ollama_emotion', 'random']")
     if candidate.history_max_sentences != 10:
         errors.append("history_max_sentences must be fixed at 10 for MVP")
+    if candidate.servo_left_gain <= 0:
+        errors.append("servo_left_gain must be > 0")
+    if candidate.servo_right_gain <= 0:
+        errors.append("servo_right_gain must be > 0")
     if candidate.servo_eye_spacing_cm < 1:
         errors.append("servo_eye_spacing_cm must be >= 1")
     for path in candidate.tracking_examples_selected + candidate.idle_examples_selected:
