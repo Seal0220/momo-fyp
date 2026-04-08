@@ -219,8 +219,8 @@ class RuntimeConfig(BaseModel):
     tts_retry_count: int = 1
     serial_port: str = "auto"
     serial_baud_rate: int = 115200
-    servo_left_zero_deg: float = 93.0
-    servo_right_zero_deg: float = 85.0
+    servo_left_zero_deg: float = 87.0
+    servo_right_zero_deg: float = 96.0
     servo_output_inverted: bool = False
     servo_left_trim_deg: float = 0.0
     servo_right_trim_deg: float = 0.0
