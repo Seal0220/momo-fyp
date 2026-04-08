@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import threading
 import time
 
 import cv2
 import numpy as np
 
 from backend.types import AudienceFeatures, RuntimeConfig, ServoTelemetry
-from backend.vision.runtime import VisionRuntime
+from backend.vision.runtime import VisionRuntime, VisionState
 
 
 def test_browser_mode_never_opens_local_capture(monkeypatch):
@@ -24,11 +25,12 @@ def test_browser_mode_never_opens_local_capture(monkeypatch):
         opened = True
         return FakeCapture()
 
-    def fake_sleep(_: float) -> None:
+    def fake_take_pending_browser_frame(*, timeout: float) -> None:
+        assert timeout in {0.2, 0.5}
         runtime.running = False
 
     monkeypatch.setattr(runtime, "_open_capture", fake_open_capture)
-    monkeypatch.setattr(time, "sleep", fake_sleep)
+    monkeypatch.setattr(runtime, "_take_pending_browser_frame", fake_take_pending_browser_frame)
 
     runtime.running = True
     runtime._loop()
@@ -46,8 +48,8 @@ def test_apply_camera_orientation_supports_horizontal_vertical_and_both_flips():
         dtype=np.uint8,
     )
 
-    horizontal = VisionRuntime(RuntimeConfig(camera_mirror_preview=True))
-    vertical = VisionRuntime(RuntimeConfig(camera_flip_vertical=True))
+    horizontal = VisionRuntime(RuntimeConfig(camera_mirror_preview=True, camera_flip_vertical=False))
+    vertical = VisionRuntime(RuntimeConfig(camera_mirror_preview=False, camera_flip_vertical=True))
     both = VisionRuntime(RuntimeConfig(camera_mirror_preview=True, camera_flip_vertical=True))
 
     np.testing.assert_array_equal(horizontal._apply_camera_orientation(frame), frame[:, ::-1])
@@ -80,6 +82,45 @@ def test_submit_jpeg_frame_processes_oriented_frame(monkeypatch):
 
     assert len(seen) == 1
     np.testing.assert_array_equal(seen[0], raw[::-1, ::-1])
+
+
+def test_running_browser_mode_queues_uploaded_frame_without_inline_processing(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    processed: list[bytes] = []
+
+    def fake_process(jpeg_bytes: bytes) -> VisionState:
+        processed.append(jpeg_bytes)
+        return VisionState(features=AudienceFeatures(track_id=9), servo=ServoTelemetry())
+
+    monkeypatch.setattr(runtime, "_process_submitted_jpeg_frame", fake_process)
+    runtime.running = True
+
+    state = runtime.submit_jpeg_frame(b"frame-a")
+
+    assert processed == []
+    assert state.features.track_id is None
+    assert runtime._pending_browser_frame == b"frame-a"
+
+
+def test_browser_loop_processes_only_latest_uploaded_frame(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    processed: list[bytes] = []
+
+    def fake_process(jpeg_bytes: bytes) -> VisionState:
+        processed.append(jpeg_bytes)
+        runtime.running = False
+        return VisionState(features=AudienceFeatures(track_id=1), servo=ServoTelemetry())
+
+    monkeypatch.setattr(runtime, "_process_submitted_jpeg_frame", fake_process)
+    runtime.running = True
+    runtime.submit_jpeg_frame(b"frame-old")
+    runtime.submit_jpeg_frame(b"frame-new")
+
+    worker = threading.Thread(target=runtime._loop, daemon=True)
+    worker.start()
+    worker.join(timeout=1)
+
+    assert processed == [b"frame-new"]
 
 
 def test_backend_capture_loop_processes_oriented_frame(monkeypatch):

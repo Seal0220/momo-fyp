@@ -40,6 +40,9 @@ class VisionRuntime:
         self.thread: threading.Thread | None = None
         self.running = False
         self.lock = threading.Lock()
+        self._browser_frame_lock = threading.Lock()
+        self._browser_frame_ready = threading.Event()
+        self._pending_browser_frame: bytes | None = None
         self.failed_open_count = 0
         self.camera_disabled = False
         self.external_frame_at: float | None = None
@@ -61,11 +64,13 @@ class VisionRuntime:
 
     def stop(self) -> None:
         self.running = False
+        self._browser_frame_ready.set()
         if self.thread:
             self.thread.join(timeout=2)
         if self.capture:
             self.capture.release()
             self.capture = None
+        self._clear_pending_browser_frame()
 
     def reconfigure(self, config: RuntimeConfig) -> None:
         self.config = config
@@ -75,6 +80,7 @@ class VisionRuntime:
         self.camera_disabled = False
         self.top_color_history.clear()
         self.bottom_color_history.clear()
+        self._clear_pending_browser_frame()
         self.stop()
         self.start()
 
@@ -142,10 +148,13 @@ class VisionRuntime:
                 if self.capture:
                     self.capture.release()
                     self.capture = None
-                if self.external_frame_at and time.monotonic() - self.external_frame_at < 2.0:
-                    time.sleep(0.2)
-                    continue
-                time.sleep(0.5)
+                timeout = 0.2 if self.external_frame_at and time.monotonic() - self.external_frame_at < 2.0 else 0.5
+                frame_bytes = self._take_pending_browser_frame(timeout=timeout)
+                if frame_bytes is not None:
+                    try:
+                        self._process_submitted_jpeg_frame(frame_bytes)
+                    except ValueError:
+                        continue
                 continue
             if self.camera_disabled:
                 time.sleep(5)
@@ -183,6 +192,13 @@ class VisionRuntime:
             time.sleep(max(0.0, 1.0 / max(1, self.config.camera_fps) * 0.5))
 
     def submit_jpeg_frame(self, jpeg_bytes: bytes) -> VisionState:
+        if self.running and self.config.camera_source == "browser":
+            self.external_frame_at = time.monotonic()
+            self._queue_browser_frame(jpeg_bytes)
+            return self.get_snapshot()
+        return self._process_submitted_jpeg_frame(jpeg_bytes)
+
+    def _process_submitted_jpeg_frame(self, jpeg_bytes: bytes) -> VisionState:
         array = np.frombuffer(jpeg_bytes, dtype=np.uint8)
         frame = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if frame is None:
@@ -204,6 +220,25 @@ class VisionRuntime:
             self.latest_state = state
             self.external_frame_at = time.monotonic()
         return state
+
+    def _queue_browser_frame(self, jpeg_bytes: bytes) -> None:
+        with self._browser_frame_lock:
+            self._pending_browser_frame = jpeg_bytes
+        self._browser_frame_ready.set()
+
+    def _take_pending_browser_frame(self, timeout: float) -> bytes | None:
+        if not self._browser_frame_ready.wait(timeout):
+            return None
+        with self._browser_frame_lock:
+            frame_bytes = self._pending_browser_frame
+            self._pending_browser_frame = None
+            self._browser_frame_ready.clear()
+            return frame_bytes
+
+    def _clear_pending_browser_frame(self) -> None:
+        with self._browser_frame_lock:
+            self._pending_browser_frame = None
+        self._browser_frame_ready.clear()
 
     def _apply_camera_orientation(self, frame: np.ndarray) -> np.ndarray:
         if self.config.camera_mirror_preview and self.config.camera_flip_vertical:

@@ -190,9 +190,9 @@ def test_cleanup_benchmark_temp_dir_logs_and_swallows_failure(monkeypatch, tmp_p
     assert "[startup] tts benchmark cleanup skipped" in captured.out
 
 
-def test_benchmark_precision_modes_skips_windows_fish_float16(monkeypatch):
+def test_benchmark_precision_modes_keeps_windows_fish_float16(monkeypatch):
     monkeypatch.setattr("backend.tts.qwen_clone.platform.system", lambda: "Windows")
 
-    assert qwen_clone._benchmark_precision_modes("fish-speech-1.5", "gpu") == ("float32",)
-    assert qwen_clone._benchmark_precision_modes("s1-mini", "gpu") == ("float32",)
+    assert qwen_clone._benchmark_precision_modes("fish-speech-1.5", "gpu") == ("float16", "float32")
+    assert qwen_clone._benchmark_precision_modes("s1-mini", "gpu") == ("float16", "float32")
     assert qwen_clone._benchmark_precision_modes("qwen3-tts-12hz-0.6b-base", "gpu") == ("float16", "float32")
