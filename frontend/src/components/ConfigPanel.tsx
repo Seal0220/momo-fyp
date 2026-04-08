@@ -130,12 +130,12 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                         (mode) => mode.width === Number.parseInt(width, 10) && mode.height === Number.parseInt(height, 10),
                       );
                       setHasLocalEdits(true);
-                      setDraft({
-                        ...draft,
+                      setDraft((current) => ({
+                        ...current,
                         camera_width: Number.parseInt(width, 10),
                         camera_height: Number.parseInt(height, 10),
                         camera_fps: matched?.fps ?? selectedFps,
-                      });
+                      }));
                     }}
                   >
                     {uniqueSizes.map((mode) => {
@@ -250,13 +250,13 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
                     value={Array.isArray(value) ? value.join("\n") : ""}
                     onChange={(e) => {
                       setHasLocalEdits(true);
-                      setDraft({
-                        ...draft,
+                      setDraft((current) => ({
+                        ...current,
                         [field.key]: e.target.value
                           .split("\n")
                           .map((item) => item.trim())
                           .filter(Boolean),
-                      });
+                      }));
                     }}
                   />
                   <FieldMeta fieldKey={field.key} appliedValue={appliedValue} pendingValue={value} isDirty={isDirty} />
@@ -293,6 +293,7 @@ export function ConfigPanel({ fields, config, cameras, audioDevices, models, onS
         onClick={() => {
           void onSubmit(draft).then((result) => {
             if (result.validation_errors.length === 0) {
+              setDraft(result.applied_config as unknown as Record<string, unknown>);
               setHasLocalEdits(false);
             }
           });
@@ -350,14 +351,14 @@ function formatTtsModelLabel(value: string): string {
 }
 
 function updateDraft(
-  setDraft: (value: Record<string, unknown>) => void,
+  setDraft: (value: Record<string, unknown> | ((current: Record<string, unknown>) => Record<string, unknown>)) => void,
   setHasLocalEdits: (value: boolean) => void,
-  current: Record<string, unknown>,
+  _current: Record<string, unknown>,
   key: string,
   value: unknown,
 ) {
   setHasLocalEdits(true);
-  setDraft({ ...current, [key]: value });
+  setDraft((current) => ({ ...current, [key]: value }));
 }
 
 function parseInput(type: string, value: string): unknown {
