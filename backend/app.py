@@ -961,6 +961,7 @@ class Brain:
             raise RuntimeError(f"TTS timeout after {elapsed_ms} ms (limit {self.config.tts_timeout_sec * 1000} ms)") from exc
         self.state.tts_latency_ms = int((time.monotonic() - started) * 1000)
         self.state.set_pipeline_stage(PipelineStage.PLAYBACK)
+        self.audio.set_routed_playback(self.config.tts_route_via_virtual_device)
         self.audio.set_output_device(self.config.audio_output_device)
         self.audio.play(output, volume=self.config.tts_output_volume)
         self.state.last_spoken_text = text
@@ -1329,12 +1330,34 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
                 }
             )
 
-    if changed & {"audio_output_device", "tts_output_volume"}:
+    if changed & {"audio_output_device", "tts_output_volume", "tts_route_via_virtual_device"}:
         available_ids = {item["id"] for item in AudioPlayer.list_output_devices()}
-        if config.audio_output_device == "default" or config.audio_output_device in available_ids:
-            checks.append({"component": "audio", "status": "ok", "message": f"Audio output set to {config.audio_output_device}."})
-        else:
+        if config.audio_output_device != "default" and config.audio_output_device not in available_ids:
             checks.append({"component": "audio", "status": "error", "message": f"Audio output device {config.audio_output_device} was not found."})
+        elif config.tts_route_via_virtual_device and config.audio_output_device == "default":
+            checks.append(
+                {
+                    "component": "audio",
+                    "status": "warning",
+                    "message": (
+                        "Virtual TTS routing is enabled, but Audio Output is still default. "
+                        "Choose an explicit virtual device on macOS or Windows for deterministic routing into VCV Rack 2."
+                    ),
+                }
+            )
+        elif config.tts_route_via_virtual_device:
+            checks.append(
+                {
+                    "component": "audio",
+                    "status": "ok",
+                    "message": (
+                        f"Audio output routed through device {config.audio_output_device}. "
+                        "Native default playback is disabled so downstream virtual-device processing stays in the chain."
+                    ),
+                }
+            )
+        else:
+            checks.append({"component": "audio", "status": "ok", "message": f"Audio output set to {config.audio_output_device}."})
 
     if changed & {"serial_port", "serial_baud_rate"}:
         if config.serial_port == "auto":

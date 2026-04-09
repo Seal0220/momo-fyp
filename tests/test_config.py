@@ -12,8 +12,9 @@ def test_default_ollama_timeout_is_600():
     assert config.ollama_timeout_sec == 600
     assert config.ollama_model == "qwen3.5:2b"
     assert config.tts_model_path == "model/huggingface/hf_snapshots/hexgrad__Kokoro-82M-v1.1-zh"
-    assert config.tts_kokoro_voice == "zf_001"
+    assert config.tts_kokoro_voice == "zf_002"
     assert config.tts_reference_mode == "ollama_emotion"
+    assert config.tts_route_via_virtual_device is False
 
 
 def test_invalid_config_detected():
@@ -33,6 +34,7 @@ def test_device_mode_fields_expose_os_specific_enum():
     assert fields["tts_device_mode"].enum == ["auto", "cpu", accelerator]
     assert fields["ollama_device_mode"].enum == ["auto", "cpu", accelerator]
     assert fields["tts_reference_mode"].enum == ["fixed", "ollama_emotion", "random"]
+    assert fields["tts_route_via_virtual_device"].type == "boolean"
     assert fields["led_min_brightness_pct"].type == "float"
     assert fields["led_max_brightness_pct"].type == "float"
     assert fields["led_brightness_output_inverted"].type == "boolean"

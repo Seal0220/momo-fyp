@@ -560,6 +560,34 @@ def test_update_config_tts_timeout_validation_failure_returns_feedback():
     assert "tts_timeout_sec must be >= 1" in payload["validation_errors"]
 
 
+def test_update_config_warns_when_virtual_routing_uses_default_device(monkeypatch):
+    original_config = brain.config.model_copy(deep=True)
+    original_serial = brain.serial
+
+    monkeypatch.setattr(
+        app_module.AudioPlayer,
+        "list_output_devices",
+        staticmethod(lambda: [{"id": "7", "name": "BlackHole 2ch"}]),
+    )
+
+    try:
+        response = client.post(
+            "/api/config",
+            json={"tts_route_via_virtual_device": True, "audio_output_device": "default"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["validation_errors"] == []
+        assert any(
+            item["component"] == "audio" and item["status"] == "warning" and "VCV Rack 2" in item["message"]
+            for item in payload["apply_checks"]
+        )
+    finally:
+        brain.config = original_config
+        brain.serial.close()
+        brain.serial = original_serial
+
+
 def test_speak_line_reports_tts_timeout_ms():
     original_tts = brain.tts
     original_timeout = brain.config.tts_timeout_sec
@@ -589,6 +617,7 @@ def test_speak_line_reports_tts_timeout_ms():
 def test_speak_line_records_emotion_selected_by_ollama_and_applied_to_fish():
     original_tts = brain.tts
     original_classify = brain._classify_tts_emotion
+    original_set_routed = brain.audio.set_routed_playback
     original_set_output = brain.audio.set_output_device
     original_play = brain.audio.play
     original_stage = brain.state.pipeline
@@ -612,6 +641,7 @@ def test_speak_line_records_emotion_selected_by_ollama_and_applied_to_fish():
 
     brain.tts = FakeTTS()
     brain._classify_tts_emotion = fake_classify
+    brain.audio.set_routed_playback = lambda *_: None
     brain.audio.set_output_device = lambda *_: None
     brain.audio.play = lambda wav_path, volume=1.0: wav_path
 
@@ -627,6 +657,7 @@ def test_speak_line_records_emotion_selected_by_ollama_and_applied_to_fish():
     finally:
         brain.tts = original_tts
         brain._classify_tts_emotion = original_classify
+        brain.audio.set_routed_playback = original_set_routed
         brain.audio.set_output_device = original_set_output
         brain.audio.play = original_play
         brain.state.pipeline = original_stage
@@ -641,6 +672,7 @@ def test_speak_line_records_emotion_selected_by_ollama_and_applied_to_fish():
 def test_speak_line_skips_emotion_when_tts_emotion_disabled():
     original_tts = brain.tts
     original_classify = brain._classify_tts_emotion
+    original_set_routed = brain.audio.set_routed_playback
     original_set_output = brain.audio.set_output_device
     original_play = brain.audio.play
     original_enabled = brain.config.tts_emotion_enabled
@@ -662,6 +694,7 @@ def test_speak_line_skips_emotion_when_tts_emotion_disabled():
 
     brain.tts = FakeTTS()
     brain._classify_tts_emotion = fail_classify
+    brain.audio.set_routed_playback = lambda *_: None
     brain.audio.set_output_device = lambda *_: None
     brain.audio.play = lambda wav_path, volume=1.0: wav_path
     brain.config.tts_emotion_enabled = False
@@ -676,6 +709,7 @@ def test_speak_line_skips_emotion_when_tts_emotion_disabled():
     finally:
         brain.tts = original_tts
         brain._classify_tts_emotion = original_classify
+        brain.audio.set_routed_playback = original_set_routed
         brain.audio.set_output_device = original_set_output
         brain.audio.play = original_play
         brain.config.tts_emotion_enabled = original_enabled
@@ -683,6 +717,46 @@ def test_speak_line_skips_emotion_when_tts_emotion_disabled():
         brain.state.tts_emotion_applied = original_applied
         brain.state.tts_emotion_used = original_used
         brain.state.tts_input_text = original_input_text
+
+
+def test_speak_line_passes_virtual_routing_flag_to_audio_player():
+    original_tts = brain.tts
+    original_config = brain.config.model_copy(deep=True)
+    original_set_routed = brain.audio.set_routed_playback
+    original_set_output = brain.audio.set_output_device
+    original_play = brain.audio.play
+    captured: dict[str, object] = {}
+
+    class FakeTTS:
+        loaded = True
+        model_profile = KOKORO_82M_ZH_PROFILE
+
+        def synthesize(self, text: str, output_path: str) -> str:
+            return output_path
+
+    brain.tts = FakeTTS()
+    brain.config = original_config.model_copy(
+        update={
+            "tts_clone_voice_enabled": False,
+            "tts_emotion_enabled": False,
+            "tts_route_via_virtual_device": True,
+            "audio_output_device": "7",
+        }
+    )
+    brain.audio.set_routed_playback = lambda enabled: captured.setdefault("routed", []).append(enabled)
+    brain.audio.set_output_device = lambda device_id: captured.setdefault("device", []).append(device_id)
+    brain.audio.play = lambda wav_path, volume=1.0: wav_path
+
+    try:
+        asyncio.run(brain._speak_line("測試台詞。"))
+        assert captured["routed"] == [True]
+        assert captured["device"] == ["7"]
+    finally:
+        brain.tts = original_tts
+        brain.config = original_config
+        brain.audio.set_routed_playback = original_set_routed
+        brain.audio.set_output_device = original_set_output
+        brain.audio.play = original_play
 
 
 def test_prepare_runtime_models_does_not_crash_on_tts_preload_failure(monkeypatch):

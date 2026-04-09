@@ -18,6 +18,7 @@ class AudioPlayer:
         self._started_at: float | None = None
         self._duration: float = 0.0
         self._output_device_id: str = "default"
+        self._prefer_routed_playback: bool = False
         self._native_process: subprocess.Popen[str] | None = None
         self.last_error: str | None = None
 
@@ -61,6 +62,9 @@ class AudioPlayer:
             sd.default.device = (input_device, target_output)
         except Exception as exc:
             self.last_error = str(exc)
+
+    def set_routed_playback(self, enabled: bool) -> None:
+        self._prefer_routed_playback = enabled
 
     def _sounddevice_playback_thread(self, data, sr) -> None:
         try:
@@ -111,6 +115,8 @@ class AudioPlayer:
             return max(0.0, min(1.0, (time.monotonic() - self._started_at) / self._duration))
 
     def _use_native_default_player(self) -> bool:
+        if self._prefer_routed_playback:
+            return False
         if self._output_device_id != "default":
             return False
         system = platform.system()
@@ -148,6 +154,8 @@ class AudioPlayer:
 
         default_output = sd.query_devices(kind="output")
         default_index = int(default_output["index"])
+        if self._prefer_routed_playback:
+            return default_index
         if not self._looks_virtual_output(str(default_output.get("name", ""))):
             return default_index
 

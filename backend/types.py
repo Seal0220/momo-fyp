@@ -215,6 +215,7 @@ class RuntimeConfig(BaseModel):
     tts_ref_text_path: str = "resource/voice/transcript3.txt"
     tts_timeout_sec: int = 300
     tts_output_volume: float = 1.0
+    tts_route_via_virtual_device: bool = False
     audio_output_device: str = "default"
     tts_autoplay: bool = True
     tts_retry_count: int = 1
