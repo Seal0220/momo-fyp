@@ -185,4 +185,25 @@ npm run build
   - Ollama 的數字來自它自己的 runtime 回報。
   - YOLO / TTS 的數字是本程序在模型 warmup / preload 時量到的 component footprint，屬於近似值。
 - `GET /api/audio/devices` 會列出本機 output devices，UI 可直接切換播放輸出。
+- 若要把 TTS 送進 VCV Rack 2 再監聽，請把 UI 的 `Route TTS Via Virtual Device` 打開。這個模式下，程式會停用 `default` 的 native direct playback，改成把 `tmp/generated.wav` 用低延遲播放送進你指定的 output device。
+- `Route TTS Via Virtual Device = true` 時，`Audio Output` 最好不要留 `default`；請明確選擇虛擬音訊裝置，不然不同主機上的系統 default output 可能被改到實體喇叭、耳機或其他 monitor route。
+
+### VCV Rack 2 Routing
+
+macOS:
+
+1. 在系統先建立虛擬音訊裝置。常見是 `BlackHole 2ch`，如果你需要更完整的監聽與回送，也可以用 `Loopback`。
+2. 在本專案 UI 的 TTS 區塊把 `Route TTS Via Virtual Device` 設成 `true`，把 `Audio Output` 設成 `BlackHole 2ch` 或你的 `Loopback` 裝置；不要留 `default`。
+3. 開啟 VCV Rack 2，放一個 `VCV Audio` 模組，把 driver/device 指到同一個虛擬裝置；repo 送進去的 TTS 會從 `FROM DEVICE` 出來。
+4. 從 `FROM DEVICE` 接到你的效果器鏈，例如 `compressor -> filter -> reverb -> limiter`，這段就是 TTS 合成完成後的低延遲處理鏈。
+5. 把效果器鏈最後接回你的監聽輸出。若你用 `BlackHole`，通常還要在 macOS `Audio MIDI Setup` 建 `Multi-Output Device` 或 `Aggregate Device`；若你用 `Loopback`，可直接在 Loopback 內把 Rack 輸出送到耳機或喇叭。
+
+Windows:
+
+1. 在系統先建立虛擬音訊裝置。最常見是 `VB-Cable`；如果你需要更複雜的監聽與回送，也可以搭配 `VoiceMeeter` 類工具。
+2. 在本專案 UI 的 TTS 區塊把 `Route TTS Via Virtual Device` 設成 `true`，把 `Audio Output` 設成 `CABLE Input (VB-Audio Virtual Cable)` 或你實際建立的虛擬裝置；不要留 `default`。
+3. 開啟 VCV Rack 2，放一個 `VCV Audio` 模組，把 driver/device 指到同一個 `VB-Cable` 裝置；repo 送進去的 TTS 會從 `FROM DEVICE` 出來。
+4. 從 `FROM DEVICE` 接到你的效果器鏈，例如 `compressor -> EQ/filter -> delay/reverb -> limiter`，這就是 VCV Rack 內實際吃到的 TTS 音訊。
+5. 把效果器鏈最後送去你的實體監聽輸出。若只裝 `VB-Cable`，通常還要再配 `VoiceMeeter`、Windows 音效監聽或其他 routing 工具，才能一邊保留虛擬輸入、一邊把處理後聲音送到耳機或喇叭。
+
 - 前端 production build 已在 Node 22 驗證通過；Node 25 不建議使用。

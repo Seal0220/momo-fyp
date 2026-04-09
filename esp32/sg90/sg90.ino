@@ -10,10 +10,7 @@ constexpr int LED_LEFT_1_PIN = 25;
 constexpr int LED_LEFT_2_PIN = 26;
 constexpr int LED_RIGHT_1_PIN = 27;
 constexpr int LED_RIGHT_2_PIN = 33;
-constexpr int LED_LEFT_1_CHANNEL = 0;
-constexpr int LED_LEFT_2_CHANNEL = 1;
-constexpr int LED_RIGHT_1_CHANNEL = 2;
-constexpr int LED_RIGHT_2_CHANNEL = 3;
+// 已經不需要手動定義 Channel，因為 ESP32 Core 3.x 會自動管理通道
 constexpr int LED_PWM_FREQ = 5000;
 constexpr int LED_PWM_RESOLUTION = 8;
 constexpr int SERIAL_BAUD = 115200;
@@ -38,10 +35,12 @@ int brightnessPctToDuty(float pct) {
 void applyLedBrightness(float leftPct, float rightPct) {
   currentLedLeftPct = constrain(leftPct, 0.0f, 100.0f);
   currentLedRightPct = constrain(rightPct, 0.0f, 100.0f);
-  ledcWrite(LED_LEFT_1_CHANNEL, brightnessPctToDuty(currentLedLeftPct));
-  ledcWrite(LED_LEFT_2_CHANNEL, brightnessPctToDuty(currentLedLeftPct));
-  ledcWrite(LED_RIGHT_1_CHANNEL, brightnessPctToDuty(currentLedRightPct));
-  ledcWrite(LED_RIGHT_2_CHANNEL, brightnessPctToDuty(currentLedRightPct));
+  
+  // ESP32 Core 3.x 版本中，ledcWrite 的第一個參數是「腳位 (Pin)」，而非「通道」
+  ledcWrite(LED_LEFT_1_PIN, brightnessPctToDuty(currentLedLeftPct));
+  ledcWrite(LED_LEFT_2_PIN, brightnessPctToDuty(currentLedLeftPct));
+  ledcWrite(LED_RIGHT_1_PIN, brightnessPctToDuty(currentLedRightPct));
+  ledcWrite(LED_RIGHT_2_PIN, brightnessPctToDuty(currentLedRightPct));
 }
 
 float extractFloatField(const String& line, const char* key, float fallback) {
@@ -83,14 +82,13 @@ void setup() {
   Serial.begin(SERIAL_BAUD);
   leftServo.attach(LEFT_PIN);
   rightServo.attach(RIGHT_PIN);
-  ledcSetup(LED_LEFT_1_CHANNEL, LED_PWM_FREQ, LED_PWM_RESOLUTION);
-  ledcSetup(LED_LEFT_2_CHANNEL, LED_PWM_FREQ, LED_PWM_RESOLUTION);
-  ledcSetup(LED_RIGHT_1_CHANNEL, LED_PWM_FREQ, LED_PWM_RESOLUTION);
-  ledcSetup(LED_RIGHT_2_CHANNEL, LED_PWM_FREQ, LED_PWM_RESOLUTION);
-  ledcAttachPin(LED_LEFT_1_PIN, LED_LEFT_1_CHANNEL);
-  ledcAttachPin(LED_LEFT_2_PIN, LED_LEFT_2_CHANNEL);
-  ledcAttachPin(LED_RIGHT_1_PIN, LED_RIGHT_1_CHANNEL);
-  ledcAttachPin(LED_RIGHT_2_PIN, LED_RIGHT_2_CHANNEL);
+  
+  // 使用新的 ledcAttach 函式，一步完成腳位、頻率與解析度的設定 (取代原本的 setup + attachPin)
+  ledcAttach(LED_LEFT_1_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  ledcAttach(LED_LEFT_2_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  ledcAttach(LED_RIGHT_1_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  ledcAttach(LED_RIGHT_2_PIN, LED_PWM_FREQ, LED_PWM_RESOLUTION);
+  
   applyServo(90.0f, 90.0f);
   applyLedBrightness(0.0f, 0.0f);
   sendStatus("status", "boot");
