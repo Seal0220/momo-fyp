@@ -1516,6 +1516,9 @@ def test_compute_led_brightness_tracks_midpoint_and_supports_inversion():
             update={
                 "led_min_brightness_pct": 10.0,
                 "led_max_brightness_pct": 90.0,
+                "led_midpoint_response_gain": 1.0,
+                "led_midpoint_response_gamma": 1.0,
+                "led_midpoint_deadzone_norm": 0.0,
                 "led_brightness_output_inverted": False,
                 "led_left_right_inverted": False,
             }
@@ -1549,6 +1552,49 @@ def test_compute_led_brightness_tracks_midpoint_and_supports_inversion():
         swapped_left, swapped_right = brain._compute_led_brightness_from_features(features)
         assert swapped_left == 26.0
         assert swapped_right == 74.0
+    finally:
+        brain.config = original_config
+
+
+def test_compute_led_brightness_supports_midpoint_response_tuning():
+    original_config = brain.config.model_copy(deep=True)
+    try:
+        features = AudienceFeatures(
+            track_id=1,
+            bbox_area_ratio=0.35,
+            center_x_norm=0.5,
+            eye_midpoint=[0.55, 0.5],
+        )
+        brain.config = original_config.model_copy(
+            update={
+                "led_min_brightness_pct": 10.0,
+                "led_max_brightness_pct": 90.0,
+                "led_midpoint_response_gain": 1.0,
+                "led_midpoint_response_gamma": 1.0,
+                "led_midpoint_deadzone_norm": 0.0,
+                "led_brightness_output_inverted": False,
+                "led_left_right_inverted": False,
+                "servo_output_inverted": False,
+            }
+        )
+        baseline_left, baseline_right = brain._compute_led_brightness_from_features(features)
+        assert baseline_left == 46.0
+        assert baseline_right == 54.0
+
+        brain.config = brain.config.model_copy(
+            update={
+                "led_midpoint_response_gain": 3.0,
+                "led_midpoint_response_gamma": 0.5,
+            }
+        )
+        boosted_left, boosted_right = brain._compute_led_brightness_from_features(features)
+        assert boosted_left == 28.09
+        assert boosted_right == 71.91
+
+        brain.config = brain.config.model_copy(update={"led_midpoint_deadzone_norm": 0.2})
+        deadzoned_left, deadzoned_right = brain._compute_led_brightness_from_features(features)
+        assert deadzoned_left == 50.0
+        assert deadzoned_right == 50.0
     finally:
         brain.config = original_config
 
