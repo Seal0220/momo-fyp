@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-import cv2
 import numpy as np
+
+POSITION_DISTANCE_CLASSES = {"far", "mid", "near"}
+POSITION_HORIZONTAL_CLASSES = {"left", "center", "right"}
+HORIZONTAL_LEFT_BOUNDARY = 1.0 / 3.0
+HORIZONTAL_RIGHT_BOUNDARY = 2.0 / 3.0
 
 
 def classify_colors(frame: np.ndarray, bbox: list[int]) -> tuple[str, str]:
@@ -53,13 +57,35 @@ def classify_body_shape(bbox: list[int], frame_shape: tuple[int, int, int]) -> t
 
 
 def classify_distance(area_ratio: float, near_threshold: float) -> str:
-    if area_ratio >= near_threshold * 2.5:
-        return "very_near"
     if area_ratio >= near_threshold:
         return "near"
     if area_ratio >= near_threshold / 2:
         return "mid"
     return "far"
+
+
+def classify_horizontal_position(center_x_norm: float) -> str:
+    center_x_norm = min(max(center_x_norm, 0.0), 1.0)
+    if center_x_norm < HORIZONTAL_LEFT_BOUNDARY:
+        return "left"
+    if center_x_norm > HORIZONTAL_RIGHT_BOUNDARY:
+        return "right"
+    return "center"
+
+
+def normalize_position_distance(distance_class: str) -> str:
+    if distance_class in {"near", "very_near"}:
+        return "near"
+    if distance_class in POSITION_DISTANCE_CLASSES:
+        return distance_class
+    return "unknown"
+
+
+def combine_position_state(distance_class: str, horizontal_class: str) -> str:
+    distance = normalize_position_distance(distance_class)
+    if distance not in POSITION_DISTANCE_CLASSES or horizontal_class not in POSITION_HORIZONTAL_CLASSES:
+        return "unknown"
+    return f"{distance}_{horizontal_class}"
 
 
 def _extract_top_clothing_roi(frame: np.ndarray, bbox: list[int]) -> np.ndarray:
@@ -90,6 +116,8 @@ def _extract_bottom_clothing_roi(frame: np.ndarray, bbox: list[int]) -> np.ndarr
 def _classify_region_color(roi: np.ndarray) -> str:
     if roi.size == 0:
         return "unknown"
+    import cv2
+
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
     h = hsv[..., 0].reshape(-1)

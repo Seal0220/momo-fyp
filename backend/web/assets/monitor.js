@@ -2,7 +2,8 @@ const frame = document.querySelector("#camera-frame");
 const frameEmpty = document.querySelector("#frame-empty");
 const badge = document.querySelector("#connection-badge");
 const cameraDevice = document.querySelector("#camera-device");
-const pythonCameraButton = document.querySelector("#python-camera-button");
+const refreshCamerasButton = document.querySelector("#refresh-cameras-button");
+const applyCameraButton = document.querySelector("#apply-camera-button");
 const recenterButton = document.querySelector("#recenter-button");
 const eventLog = document.querySelector("#event-log");
 
@@ -14,6 +15,7 @@ const fields = {
   bbox: document.querySelector("#bbox-value"),
   center: document.querySelector("#center-value"),
   distance: document.querySelector("#distance-value"),
+  position: document.querySelector("#position-value"),
   colors: document.querySelector("#colors-value"),
   leftServo: document.querySelector("#left-servo-value"),
   rightServo: document.querySelector("#right-servo-value"),
@@ -29,6 +31,8 @@ const fields = {
 };
 
 let lastFrameOk = false;
+let hasLoadedCameras = false;
+let hasPendingCameraSelection = false;
 
 function text(value, fallback = "-") {
   if (value === null || value === undefined || value === "") {
@@ -60,6 +64,71 @@ function runtimeLabel(runtime) {
   return `${backend} / ${device}`;
 }
 
+function cameraLabel(camera) {
+  const deviceName = camera.device_name || "Camera";
+  const deviceId = camera.device_id || "default";
+  const modes = Array.isArray(camera.modes) ? camera.modes : [];
+  const preferredMode = modes[0];
+  if (!preferredMode) {
+    return `${deviceName} (${deviceId})`;
+  }
+  return `${deviceName} (${deviceId}) - ${preferredMode.width}x${preferredMode.height}@${preferredMode.fps}`;
+}
+
+function ensureCameraOption(deviceId, label = null) {
+  if (!deviceId) {
+    return;
+  }
+  if (Array.from(cameraDevice.options).some((option) => option.value === deviceId)) {
+    return;
+  }
+  const option = document.createElement("option");
+  option.value = deviceId;
+  option.textContent = label || `Current camera (${deviceId})`;
+  cameraDevice.append(option);
+}
+
+function setCameraOptions(cameras, selectedDeviceId = "default") {
+  const options = cameras.map((camera) => {
+    const option = document.createElement("option");
+    option.value = camera.device_id || "default";
+    option.textContent = cameraLabel(camera);
+    return option;
+  });
+
+  if (!options.length) {
+    const fallback = document.createElement("option");
+    fallback.value = "default";
+    fallback.textContent = "Default camera";
+    options.push(fallback);
+  }
+
+  cameraDevice.replaceChildren(...options);
+  ensureCameraOption(selectedDeviceId);
+  cameraDevice.value = selectedDeviceId || "default";
+}
+
+async function refreshCameraList(selectedDeviceId = cameraDevice.value || "default") {
+  refreshCamerasButton.disabled = true;
+  refreshCamerasButton.textContent = "Refreshing";
+  try {
+    const response = await fetch("/api/cameras", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`cameras ${response.status}`);
+    }
+    const cameras = await response.json();
+    setCameraOptions(Array.isArray(cameras) ? cameras : [], selectedDeviceId);
+    hasLoadedCameras = true;
+  } catch (error) {
+    ensureCameraOption(selectedDeviceId || "default", "Default camera");
+    cameraDevice.value = selectedDeviceId || "default";
+    setBadge("error", "camera scan failed");
+  } finally {
+    refreshCamerasButton.disabled = false;
+    refreshCamerasButton.textContent = "Refresh";
+  }
+}
+
 function setBadge(kind, label) {
   badge.className = `status-badge ${kind}`;
   badge.textContent = label;
@@ -70,14 +139,20 @@ function updateStatus(status) {
   const servo = status.servo || {};
   const serial = status.serial_monitor || {};
   const stats = status.stats || {};
+  const cameraDeviceId = status.camera_device_id || "default";
 
   fields.cameraMode.textContent = `${text(status.camera_device_id)} / ${text(status.camera_mode)}`;
+  if (hasLoadedCameras && !hasPendingCameraSelection) {
+    ensureCameraOption(cameraDeviceId);
+    cameraDevice.value = cameraDeviceId;
+  }
   fields.mode.textContent = text(status.mode, "IDLE");
   fields.fps.textContent = `${fixed(status.yolo_detect_fps, 1)} fps`;
   fields.track.textContent = `track ${text(audience.track_id)}`;
   fields.bbox.textContent = audience.person_bbox ? audience.person_bbox.join(", ") : "-";
   fields.center.textContent = `${fixed(audience.center_x_norm, 3)}, ${fixed(audience.center_y_norm, 3)}`;
   fields.distance.textContent = `${text(audience.distance_class)} (${percent(audience.bbox_area_ratio)})`;
+  fields.position.textContent = `${text(audience.position_state)} / ${text(audience.horizontal_class)}`;
   fields.colors.textContent = `${text(audience.top_color)} / ${text(audience.bottom_color)}`;
   fields.leftServo.textContent = `${fixed(servo.left_deg, 1)} deg`;
   fields.rightServo.textContent = `${fixed(servo.right_deg, 1)} deg`;
@@ -141,17 +216,26 @@ async function postJson(url, payload = {}) {
   return response.json();
 }
 
-pythonCameraButton.addEventListener("click", async () => {
-  pythonCameraButton.disabled = true;
+refreshCamerasButton.addEventListener("click", async () => {
+  await refreshCameraList();
+});
+
+cameraDevice.addEventListener("change", () => {
+  hasPendingCameraSelection = true;
+});
+
+applyCameraButton.addEventListener("click", async () => {
+  applyCameraButton.disabled = true;
   try {
     await postJson("/api/config", {
       camera_source: "backend",
-      camera_device_id: cameraDevice.value.trim() || "default",
+      camera_device_id: cameraDevice.value || "default",
     });
+    hasPendingCameraSelection = false;
     await refreshStatus();
     refreshFrame();
   } finally {
-    pythonCameraButton.disabled = false;
+    applyCameraButton.disabled = false;
   }
 });
 
@@ -165,6 +249,7 @@ recenterButton.addEventListener("click", async () => {
   }
 });
 
+refreshCameraList();
 refreshStatus();
 refreshFrame();
 setInterval(refreshStatus, 500);

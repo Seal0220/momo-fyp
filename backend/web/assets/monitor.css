@@ -21,7 +21,7 @@ body {
 }
 
 button,
-input {
+select {
   font: inherit;
 }
 
@@ -43,9 +43,9 @@ button:disabled {
   background: #77736a;
 }
 
-input {
+select {
   min-height: 40px;
-  width: min(220px, 100%);
+  width: min(280px, 100%);
   border: 1px solid #171717;
   background: #fffef9;
   color: #171717;
@@ -123,6 +123,10 @@ input {
   padding: 10px 14px;
   border-bottom: 2px solid #171717;
   background: #fffef9;
+}
+
+.video-toolbar button {
+  white-space: nowrap;
 }
 
 .device-field {

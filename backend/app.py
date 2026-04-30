@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+if __name__ == "__main__" and __package__ is None:
+    # Keep direct file execution from shadowing stdlib modules with backend/types.py.
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _backend_dir = _Path(__file__).resolve().parent
+    _project_root = _backend_dir.parent
+    _sys.path = [
+        path
+        for path in _sys.path
+        if _Path(path or ".").resolve() != _backend_dir
+    ]
+    _sys.path.insert(0, str(_project_root))
+
 import argparse
 import asyncio
 import contextlib
@@ -15,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.audio.position_audio import PositionAudioPlayer
 from backend.config import build_field_catalog, merge_config, validate_runtime_config
 from backend.device_utils import backend_label_for_device, expected_accelerator_label, expected_vision_backend_label
 from backend.model_manager import ensure_runtime_models
@@ -24,7 +39,14 @@ from backend.servo.geometry import compute_servo_angles
 from backend.state_machine import RuntimeState
 from backend.storage.csv_logger import append_audience_snapshot
 from backend.telemetry.system_stats import capture_process_footprint, diff_process_footprint, get_system_stats
-from backend.types import ConfigUpdateResponse, PipelineStage, RuntimeComponentStats, RuntimeConfig, SystemMode
+from backend.types import AudienceFeatures, ConfigUpdateResponse, PipelineStage, RuntimeComponentStats, RuntimeConfig, SystemMode
+from backend.vision.features import (
+    POSITION_HORIZONTAL_CLASSES,
+    classify_distance,
+    classify_horizontal_position,
+    combine_position_state,
+    normalize_position_distance,
+)
 from backend.vision.runtime import VisionRuntime
 
 SERIAL_REFRESH_INTERVAL_SEC = 2.0
@@ -37,6 +59,7 @@ class Brain:
         self.state = RuntimeState()
         self.serial = ESP32Link(self.config.serial_port, self.config.serial_baud_rate)
         self.vision = VisionRuntime(self.config)
+        self.position_audio = PositionAudioPlayer()
         self.yolo_person_runtime = RuntimeComponentStats(
             requested_mode=self.config.yolo_device_mode,
             effective_device=self.vision.detector.device,
@@ -49,6 +72,7 @@ class Brain:
 
     async def start(self) -> None:
         clear_shutdown_request()
+        self.position_audio.ensure_state_directories()
         if should_prepare_models():
             await asyncio.to_thread(self._prepare_vision_models)
         await self._print_startup_diagnostics()
@@ -114,8 +138,9 @@ class Brain:
 
     def snapshot(self):
         vision = self.vision.get_snapshot()
-        self.state.audience = vision.features
-        self.state.servo = self._compute_servo_from_features(vision.features, vision.servo.tracking_source)
+        features = self._prepare_position_features(vision.features)
+        self.state.audience = features
+        self.state.servo = self._compute_servo_from_features(features, vision.servo.tracking_source)
         snap = self.state.snapshot()
         snap.stats = get_system_stats("tmp")
         snap.serial_connected = self.serial.connected
@@ -124,6 +149,7 @@ class Brain:
         snap.camera_mode = f"{self.config.camera_width}x{self.config.camera_height}@{self.config.camera_fps}"
         snap.yolo_detect_fps = self.vision.detect_fps()
         snap.yolo_person_runtime = self.yolo_person_runtime
+        snap.position_audio = self.position_audio.snapshot()
         return snap
 
     def send_servo_for_features(self, features, tracking_source: str) -> None:
@@ -162,9 +188,10 @@ class Brain:
     def _update_mode_from_vision(self) -> None:
         now = time.monotonic()
         vision = self.vision.get_snapshot()
-        features = vision.features
+        features = self._prepare_position_features(vision.features)
         self.state.audience = features
         self.send_servo_for_features(features, vision.servo.tracking_source)
+        self._update_position_audio_for_features(features)
 
         lock_threshold = self.config.lock_bbox_threshold_ratio
         unlock_threshold = self.config.unlock_bbox_threshold_ratio or lock_threshold
@@ -191,6 +218,31 @@ class Brain:
         if self.state.mode != SystemMode.TRACKING:
             self.state.set_mode(SystemMode.TRACKING, "Locked target acquired")
         self.state.locked_track_id = features.track_id
+
+    def _prepare_position_features(self, features: AudienceFeatures) -> AudienceFeatures:
+        if features.track_id is None:
+            return features.model_copy(update={"horizontal_class": "unknown", "position_state": "unknown"})
+
+        distance = normalize_position_distance(features.distance_class)
+        if distance == "unknown":
+            distance = classify_distance(features.bbox_area_ratio, self.config.lock_bbox_threshold_ratio)
+        horizontal = features.horizontal_class
+        if horizontal not in POSITION_HORIZONTAL_CLASSES:
+            horizontal = classify_horizontal_position(features.center_x_norm)
+        position_state = combine_position_state(distance, horizontal)
+
+        return features.model_copy(
+            update={
+                "distance_class": distance,
+                "horizontal_class": horizontal,
+                "position_state": position_state,
+            }
+        )
+
+    def _update_position_audio_for_features(self, features: AudienceFeatures) -> None:
+        result = self.position_audio.handle_state(features.position_state)
+        if result.message:
+            self.state.event_log = [result.message, *self.state.event_log][:20]
 
     def _compute_servo_from_features(self, features, tracking_source: str):
         servo = compute_servo_angles(
@@ -510,10 +562,13 @@ async def post_camera_frame(request: Request):
         state = brain.vision.submit_jpeg_frame(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    features = brain._prepare_position_features(state.features)
     if brain.config.camera_source == "browser":
-        brain.send_servo_for_features(state.features, state.servo.tracking_source)
+        brain.send_servo_for_features(features, state.servo.tracking_source)
+        brain._update_position_audio_for_features(features)
     return {
-        "track_id": state.features.track_id,
+        "track_id": features.track_id,
+        "position_state": features.position_state,
         "tracking_source": state.servo.tracking_source,
     }
 

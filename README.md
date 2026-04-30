@@ -6,6 +6,7 @@ Momo 現在只保留 Python backend、人物偵測與 Arduino/ESP32 控制。後
 
 - `backend/`: FastAPI 長駐程式，負責 camera ingest、人物偵測、狀態機、servo/LED mapping、serial、telemetry。
 - `backend/vision/`: YOLO person detection、bbox 中心點、距離、衣著顏色與身形分類。
+- `backend/audio/states/`: 人物位置音效資料夾，使用 `near_left`、`mid_center` 這類英文狀態名稱放預錄音檔。
 - `backend/serial/`: ESP32 serial link 與 compact JSON command。
 - `backend/servo/`: 眼球 servo 幾何與角度計算。
 - `esp32/`: Arduino firmware 與硬體測試 sketch。
@@ -47,6 +48,23 @@ http://127.0.0.1:8000/monitor
 ```
 
 監控頁會顯示 Python 後端相機的標註畫面、人物 bbox、tracking mode、YOLO FPS、servo 角度、serial 狀態與最近事件。`Python Camera` 按鈕會把 camera source 切回後端 OpenCV capture。
+
+## Position Audio
+
+人物偵測後會產生 `far/mid/near` 與 `left/center/right` 組成的九個狀態，例如 `near_left`、`mid_center`。`far_*` 狀態只更新狀態，不播放音效；`mid_*` 與 `near_*` 會在狀態切換時播放對應資料夾中的第一個音檔。
+
+請把預錄音檔放在：
+
+```text
+backend/audio/states/near_left/
+backend/audio/states/near_center/
+backend/audio/states/near_right/
+backend/audio/states/mid_left/
+backend/audio/states/mid_center/
+backend/audio/states/mid_right/
+```
+
+Windows 內建播放目前支援 `.wav`；macOS/Linux 會嘗試使用系統可用的播放工具。
 
 ## ESP32
 

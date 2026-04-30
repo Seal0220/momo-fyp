@@ -31,6 +31,8 @@ class AudienceFeatures(BaseModel):
     center_x_norm: float = 0.5
     center_y_norm: float = 0.5
     distance_class: str = "unknown"
+    horizontal_class: str = "unknown"
+    position_state: str = "unknown"
     height_class: str = "unknown"
     build_class: str = "unknown"
     top_color: str = "unknown"
@@ -85,6 +87,13 @@ class RuntimeComponentStats(BaseModel):
     vram_mb: float | None = None
 
 
+class PositionAudioSnapshot(BaseModel):
+    current_state: str = "unknown"
+    last_triggered_state: str | None = None
+    last_audio_file: str | None = None
+    last_error: str | None = None
+
+
 class StatusSnapshot(BaseModel):
     ts: str = Field(default_factory=utc_now_iso)
     mode: SystemMode = SystemMode.IDLE
@@ -99,6 +108,7 @@ class StatusSnapshot(BaseModel):
     serial_connected: bool = False
     yolo_detect_fps: float = 0.0
     yolo_person_runtime: RuntimeComponentStats = Field(default_factory=RuntimeComponentStats)
+    position_audio: PositionAudioSnapshot = Field(default_factory=PositionAudioSnapshot)
     event_log: list[str] = Field(default_factory=list)
 
 

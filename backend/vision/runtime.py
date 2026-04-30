@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import platform
 import threading
 import time
+import contextlib
 from collections import deque
 from dataclasses import dataclass
 
@@ -10,7 +12,14 @@ import cv2
 import numpy as np
 
 from backend.types import AudienceFeatures, RuntimeConfig, ServoTelemetry
-from backend.vision.features import classify_body_shape, classify_colors, classify_distance, smooth_color_labels
+from backend.vision.features import (
+    classify_body_shape,
+    classify_colors,
+    classify_distance,
+    classify_horizontal_position,
+    combine_position_state,
+    smooth_color_labels,
+)
 from backend.vision.person_detector import PersonDetector
 
 
@@ -63,8 +72,7 @@ class VisionRuntime:
         if self.thread:
             self.thread.join(timeout=2)
         if self.capture:
-            self.capture.release()
-            self.capture = None
+            self._release_capture()
         self._clear_pending_browser_frame()
         with self.lock:
             self._processed_frame_times.clear()
@@ -117,23 +125,26 @@ class VisionRuntime:
             ]
         cameras: list[dict] = []
         for index in range(5):
-            cap = cv2.VideoCapture(index)
-            if not cap.isOpened():
-                cap.release()
+            cap = self._create_video_capture(index)
+            if not self._is_capture_opened(cap):
+                self._release_video_capture(cap)
                 continue
             modes = []
             for width, height, fps in [(640, 480, 30), (1280, 720, 30), (1920, 1080, 30), (1280, 720, 60)]:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                cap.set(cv2.CAP_PROP_FPS, fps)
-                got_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                got_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                got_fps = int(round(cap.get(cv2.CAP_PROP_FPS) or fps))
+                try:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                    cap.set(cv2.CAP_PROP_FPS, fps)
+                    got_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    got_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    got_fps = int(round(cap.get(cv2.CAP_PROP_FPS) or fps))
+                except cv2.error:
+                    continue
                 mode = {"width": got_w, "height": got_h, "fps": got_fps}
                 if mode not in modes:
                     modes.append(mode)
             cameras.append({"device_id": str(index), "device_name": f"Camera {index}", "modes": modes})
-            cap.release()
+            self._release_video_capture(cap)
         if not cameras:
             cameras.append(
                 {
@@ -146,19 +157,56 @@ class VisionRuntime:
 
     def _open_capture(self) -> cv2.VideoCapture:
         os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
-        device_index = 0 if self.config.camera_device_id == "default" else int(self.config.camera_device_id)
-        capture = cv2.VideoCapture(device_index)
+        device_index = self._camera_device_index()
+        capture = self._create_video_capture(device_index)
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera_width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera_height)
         capture.set(cv2.CAP_PROP_FPS, self.config.camera_fps)
         return capture
 
+    def _camera_device_index(self) -> int:
+        if self.config.camera_device_id == "default":
+            return 0
+        try:
+            return int(self.config.camera_device_id)
+        except ValueError:
+            return 0
+
+    def _create_video_capture(self, device_index: int) -> cv2.VideoCapture:
+        if platform.system() == "Windows":
+            return cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
+        return cv2.VideoCapture(device_index)
+
+    def _is_capture_opened(self, capture: cv2.VideoCapture) -> bool:
+        try:
+            return capture.isOpened()
+        except cv2.error:
+            return False
+
+    def _release_capture(self) -> None:
+        if self.capture is None:
+            return
+        self._release_video_capture(self.capture)
+        self.capture = None
+
+    def _release_video_capture(self, capture: cv2.VideoCapture) -> None:
+        with contextlib.suppress(cv2.error):
+            capture.release()
+
+    def _read_capture_frame(self) -> tuple[bool, np.ndarray | None]:
+        if self.capture is None:
+            return False, None
+        try:
+            return self.capture.read()
+        except cv2.error:
+            self._release_capture()
+            return False, None
+
     def _loop(self) -> None:
         while self.running:
             if self.config.camera_source == "browser":
                 if self.capture:
-                    self.capture.release()
-                    self.capture = None
+                    self._release_capture()
                 timeout = 0.2 if self.external_frame_at and time.monotonic() - self.external_frame_at < 2.0 else 0.5
                 frame_bytes = self._take_pending_browser_frame(timeout=timeout)
                 if frame_bytes is not None:
@@ -172,20 +220,23 @@ class VisionRuntime:
                 continue
             if not self.capture:
                 self.capture = self._open_capture()
-            if not self.capture.isOpened():
+            if not self._is_capture_opened(self.capture):
                 self.failed_open_count += 1
+                self._release_capture()
                 if self.failed_open_count >= 3:
                     self.camera_disabled = True
                     time.sleep(5)
                     continue
                 time.sleep(2)
-                self.capture = self._open_capture()
                 continue
-            self.failed_open_count = 0
-            ok, frame = self.capture.read()
+            ok, frame = self._read_capture_frame()
             if not ok or frame is None:
+                self.failed_open_count += 1
+                if self.failed_open_count >= 3:
+                    self.camera_disabled = True
                 time.sleep(0.05)
                 continue
+            self.failed_open_count = 0
             frame = self._apply_camera_orientation(frame)
             features, servo = self._process_frame(frame)
             annotated = self._annotate(frame.copy(), features)
@@ -276,6 +327,7 @@ class VisionRuntime:
         bottom_color = smooth_color_labels(list(self.bottom_color_history), bottom_color)
         height_class, build_class = classify_body_shape(person.bbox, frame.shape)
         distance = classify_distance(person.bbox_area_ratio, self.config.lock_bbox_threshold_ratio)
+        horizontal = classify_horizontal_position(person.center_x_norm)
         features = AudienceFeatures(
             track_id=person.track_id if person.track_id >= 0 else 1,
             person_bbox=person.bbox,
@@ -283,6 +335,8 @@ class VisionRuntime:
             center_x_norm=person.center_x_norm,
             center_y_norm=person.center_y_norm,
             distance_class=distance,
+            horizontal_class=horizontal,
+            position_state=combine_position_state(distance, horizontal),
             height_class=height_class,
             build_class=build_class,
             top_color=top_color,
@@ -312,7 +366,7 @@ class VisionRuntime:
             self._draw_box(frame, features.person_bbox, (88, 166, 255), "Person")
         cv2.putText(
             frame,
-            f"track={features.track_id} dist={features.distance_class} area={features.bbox_area_ratio:.3f}",
+            f"track={features.track_id} pos={features.position_state} area={features.bbox_area_ratio:.3f}",
             (20, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
