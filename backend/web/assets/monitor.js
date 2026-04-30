@@ -33,7 +33,8 @@ const fields = {
   lightRegion: document.querySelector("#light-region-value"),
   lightLeft: document.querySelector("#light-left-value"),
   lightRight: document.querySelector("#light-right-value"),
-  lightLeds: document.querySelector("#light-leds-value"),
+  lightLeftLeds: document.querySelector("#light-left-leds-value"),
+  lightRightLeds: document.querySelector("#light-right-leds-value"),
   serialState: document.querySelector("#serial-state-value"),
   serialPort: document.querySelector("#serial-port-value"),
   serialTx: document.querySelector("#serial-tx-value"),
@@ -70,6 +71,7 @@ const lightRegionLabels = {
   no_one: "1-無人",
   left: "2-左",
   right: "3-右",
+  left_right: "2-左, 3-右",
   full: "4-全",
 };
 const lightSideStateLabels = {
@@ -135,13 +137,6 @@ function normalizeAudioStates(audio) {
   return ["no_one"];
 }
 
-function activeLedLabel(indexes) {
-  if (!Array.isArray(indexes) || !indexes.length) {
-    return "-";
-  }
-  return indexes.map((index) => String(index + 1)).join(", ");
-}
-
 function lightSideLabel(side) {
   if (!side) {
     return "-";
@@ -150,6 +145,23 @@ function lightSideLabel(side) {
   const brightness = `${fixed(side.brightness_pct, 1)}%`;
   const cycle = side.solid ? "solid" : `${fixed(side.cycle_sec, 2)}s`;
   return `${state} / ${brightness} / ${cycle}`;
+}
+
+function renderLedGrid(container, indexes, totalCount = 15) {
+  if (!container) {
+    return;
+  }
+  const active = new Set(Array.isArray(indexes) ? indexes : []);
+  const cells = [];
+  for (let index = 0; index < totalCount; index += 1) {
+    const cell = document.createElement("span");
+    cell.className = "led-cell";
+    cell.classList.toggle("on", active.has(index));
+    cell.textContent = String(index + 1);
+    cell.title = `LED ${index + 1}`;
+    cells.push(cell);
+  }
+  container.replaceChildren(...cells);
 }
 
 function runtimeLabel(runtime) {
@@ -285,8 +297,13 @@ function updateStatus(status) {
   fields.lightRegion.textContent = lightRegionLabels[light.region] || text(light.region);
   fields.lightLeft.textContent = lightSideLabel(light.left);
   fields.lightRight.textContent = lightSideLabel(light.right);
-  fields.lightLeds.textContent = `L ${activeLedLabel(light.left?.active_led_indexes)} / R ${activeLedLabel(light.right?.active_led_indexes)}`;
-  updateZoneMap("light-zone-map", [light.region || "no_one"]);
+  const leftLedIndexes = light.left?.active_led_indexes || [];
+  const rightLedIndexes = light.right?.active_led_indexes || [];
+  const ledTotal = Math.max(15, leftLedIndexes.length, rightLedIndexes.length);
+  renderLedGrid(fields.lightLeftLeds, leftLedIndexes, ledTotal);
+  renderLedGrid(fields.lightRightLeds, rightLedIndexes, ledTotal);
+  const lightActiveZones = light.region === "left_right" ? ["left", "right"] : [light.region || "no_one"];
+  updateZoneMap("light-zone-map", lightActiveZones);
   fields.serialState.textContent = status.serial_connected ? "connected" : "offline";
   fields.serialPort.textContent = text(serial.port);
   fields.serialTx.textContent = text(serial.last_tx);

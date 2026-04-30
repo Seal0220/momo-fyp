@@ -7,10 +7,10 @@ from typing import Literal, TypeAlias
 BBox: TypeAlias = Sequence[int]
 FrameShape = tuple[int, int] | tuple[int, int, int]
 AudioRegionState = Literal["no_one", "left", "center", "right", "full"]
-LightRegionStateName = Literal["no_one", "left", "right", "full"]
+LightRegionStateName = Literal["no_one", "left", "right", "left_right", "full"]
 
 AUDIO_REGION_STATES: tuple[AudioRegionState, ...] = ("no_one", "left", "center", "right", "full")
-LIGHT_REGION_STATES: tuple[LightRegionStateName, ...] = ("no_one", "left", "right", "full")
+LIGHT_REGION_STATES: tuple[LightRegionStateName, ...] = ("no_one", "left", "right", "left_right", "full")
 
 
 @dataclass(frozen=True)
@@ -34,11 +34,9 @@ def classify_audio_roi_states(
     width, height = _frame_dimensions(frame_shape)
     states: set[AudioRegionState] = set()
     max_area_ratio = 0.0
-    total_area_ratio = 0.0
     for bbox in person_bboxes:
         area_ratio = bbox_area_ratio(bbox, width, height)
         max_area_ratio = max(max_area_ratio, area_ratio)
-        total_area_ratio += area_ratio
         center_x = bbox_center_x_norm(bbox, width)
         if center_x < 1.0 / 3.0:
             states.add("left")
@@ -47,7 +45,7 @@ def classify_audio_roi_states(
         else:
             states.add("center")
 
-    if max_area_ratio >= full_frame_threshold_ratio or total_area_ratio >= full_frame_threshold_ratio:
+    if max_area_ratio >= full_frame_threshold_ratio:
         return {"full"}
     return states or {"no_one"}
 
@@ -73,8 +71,11 @@ def classify_light_roi_state(
     right_present = False
     left_super_close = False
     right_super_close = False
+    full_frame_person = False
     for bbox in person_bboxes:
         area_ratio = bbox_area_ratio(bbox, width, height)
+        if area_ratio >= super_close_threshold_ratio:
+            full_frame_person = True
         intersects_left = bbox_x_overlap_ratio(bbox, width, 0.0, 0.5) >= side_overlap_threshold_ratio
         intersects_right = bbox_x_overlap_ratio(bbox, width, 0.5, 1.0) >= side_overlap_threshold_ratio
         left_present = left_present or intersects_left
@@ -83,8 +84,14 @@ def classify_light_roi_state(
             left_super_close = left_super_close or intersects_left
             right_super_close = right_super_close or intersects_right
 
-    if left_present and right_present:
+    if full_frame_person:
         region: LightRegionStateName = "full"
+        left_present = True
+        right_present = True
+        left_super_close = True
+        right_super_close = True
+    elif left_present and right_present:
+        region = "left_right"
     elif left_present:
         region = "left"
     elif right_present:

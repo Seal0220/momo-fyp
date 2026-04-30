@@ -46,12 +46,12 @@ class RuntimeConfig(BaseModel):
 
     class Audio(BaseModel):
         state_dir: str = "backend/audio/interaction_states"
-        full_frame_threshold_ratio: float = 0.70
+        full_frame_threshold_ratio: float = 0.35
 
     class Light(BaseModel):
         side_led_count: int = 15
         active_led_count_per_cycle: int = 5
-        super_close_bbox_threshold_ratio: float = 0.65
+        super_close_bbox_threshold_ratio: float = 0.35
         empty_cycle_sec: float = 4.0
         empty_brightness_level: float = 1.0
         present_start_after_sec: float = 3.0
@@ -253,10 +253,10 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str | None]] = {
     "distance.near_bbox_threshold_ratio": ("Near Distance", "Person bbox area ratio classified as near.", "0.001-0.95"),
     "distance.mid_bbox_threshold_ratio": ("Mid Distance", "Person bbox area ratio classified as mid distance.", "0.001-0.95"),
     "audio.state_dir": ("Audio State Dir", "Folder containing no_one, left, center, right, and full audio subfolders.", None),
-    "audio.full_frame_threshold_ratio": ("Audio Full Threshold", "BBox area ratio that triggers the audio full-frame state.", "0.01-0.99"),
+    "audio.full_frame_threshold_ratio": ("Audio Full Threshold", "Single-person bbox area ratio that triggers the audio full-frame state.", "0.01-0.99"),
     "light.side_led_count": ("LEDs Per Side", "Number of independently addressed LEDs on each side.", ">=1"),
     "light.active_led_count_per_cycle": ("Active LEDs Per Cycle", "Random LEDs lit per side on each blinking cycle.", "1-side count"),
-    "light.super_close_bbox_threshold_ratio": ("Super Close Threshold", "BBox area ratio that latches a side to solid 10A output.", "0.01-0.99"),
+    "light.super_close_bbox_threshold_ratio": ("Super Close Threshold", "Single-person bbox area ratio that triggers full light state and solid 10A output.", "0.01-0.99"),
     "light.empty_cycle_sec": ("Empty Cycle", "Blink cycle in seconds when a side has no person.", ">0"),
     "light.empty_brightness_level": ("Empty Level", "Brightness level for empty breathing output.", "1A-10A"),
     "light.present_start_after_sec": ("Present Start Time", "Seconds before the present mapping begins.", ">=0"),

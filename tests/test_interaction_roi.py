@@ -38,7 +38,7 @@ def test_audio_roi_full_frame_threshold_overrides_regional_state() -> None:
     assert states == {"full"}
 
 
-def test_audio_roi_full_frame_can_use_combined_coverage() -> None:
+def test_audio_roi_combined_multi_person_coverage_does_not_trigger_full() -> None:
     states = classify_audio_roi_states(
         [
             [0, 0, 960, 1080],
@@ -48,7 +48,7 @@ def test_audio_roi_full_frame_can_use_combined_coverage() -> None:
         full_frame_threshold_ratio=0.70,
     )
 
-    assert states == {"full"}
+    assert states == {"left", "right"}
 
 
 def test_light_roi_keeps_left_right_classification_separate_from_audio() -> None:
@@ -60,14 +60,14 @@ def test_light_roi_keeps_left_right_classification_separate_from_audio() -> None
         (1920, 1080),
     )
 
-    assert state.region == "full"
+    assert state.region == "left_right"
     assert state.left_present is True
     assert state.right_present is True
     assert state.left_super_close is False
     assert state.right_super_close is False
 
 
-def test_light_roi_marks_super_close_per_intersecting_side() -> None:
+def test_light_roi_marks_single_huge_person_as_full_and_super_close() -> None:
     state = classify_light_roi_state(
         [[0, 0, 1500, 1080]],
         (1920, 1080),

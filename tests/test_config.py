@@ -42,6 +42,8 @@ def test_device_mode_fields_expose_os_specific_enum():
     assert fields["distance.mid_bbox_threshold_ratio"].type == "float"
     assert fields["light.side_led_count"].value == 15
     assert fields["light.active_led_count_per_cycle"].value == 5
+    assert fields["audio.full_frame_threshold_ratio"].value == 0.35
+    assert fields["light.super_close_bbox_threshold_ratio"].value == 0.35
 
 
 def test_invalid_light_active_led_count_detected():
