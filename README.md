@@ -1,209 +1,83 @@
-# Momo MVP
+# Momo Vision Backend
 
-Momo 是一個單機互動裝置 MVP：用 webcam 追蹤觀眾，透過 Ollama 生成文本與 TTS 情緒標記，交給 Fish Speech V1.5、Fish Audio S1 Mini、Qwen3-TTS、Kokoro-82M 或 MeloTTS 做朗讀，再透過 ESP32 控制雙眼 SG90 伺服馬達。
+Momo 現在只保留 Python backend、人物偵測與 Arduino/ESP32 控制。後端預設由 Python/OpenCV 直接開啟 webcam 做 YOLO person detection，並透過 serial 將雙眼 SG90 servo 與 LED 亮度指令送到 ESP32。
 
 ## 架構
 
-- `backend/`: Python 長駐程式，負責狀態機、prompt、Ollama、TTS、serial、telemetry。
-- `frontend/`: Vite + TypeScript 控制台，調參、監看 pipeline、記憶體、servo 角度。
-- `esp32/sg90/`: Arduino firmware，接收左右眼角度。
-- `resource/`: system prompt、examples、voice clone 素材。
-
-## 視覺與控制規則
-
-- `YOLO11n` 用於 `person bbox` 與 threshold。
-- 馬達追視優先看 face/eye tracking；若眼睛失效，回退到 person center。
-- person bbox 決定 lock/unlock，眼睛定位只決定 servo aiming。
-- Track mode LLM 依句序 `1..10` 對齊對應 example stage。
-- UI 高亮顯示當前流程：`LLM > TTS > PLAYBACK`。
+- `backend/`: FastAPI 長駐程式，負責 camera ingest、人物偵測、狀態機、servo/LED mapping、serial、telemetry。
+- `backend/vision/`: YOLO person detection、bbox 中心點、距離、衣著顏色與身形分類。
+- `backend/serial/`: ESP32 serial link 與 compact JSON command。
+- `backend/servo/`: 眼球 servo 幾何與角度計算。
+- `esp32/`: Arduino firmware 與硬體測試 sketch。
+- `tests/`: Python backend、vision、serial、servo 測試。
 
 ## 安裝
-
-### Python
 
 ```bash
 uv sync
 ```
 
-`uv sync` 會依作業系統自動選 PyTorch wheel：
-- macOS: `torch==2.4.1` `torchaudio==2.4.1` `torchvision==0.19.1`
-- Windows: `torch==2.4.1+cu118` `torchaudio==2.4.1+cu118` `torchvision==0.19.1+cu118`
+`uv sync` 會依作業系統安裝 PyTorch：
 
-Python 建議使用 `3.11` 或 `3.12`；`torch 2.4.1` 不適合 `3.13`。
+- macOS: `torch==2.4.1`、`torchvision==0.19.1`
+- Windows: `torch==2.4.1+cu118`、`torchvision==0.19.1+cu118`
 
-### Node
-
-前端固定使用 Node 22。
-
-```bash
-source ~/.nvm/nvm.sh
-nvm install 22
-nvm use 22
-```
-
-macOS Apple Silicon:
-- `uv sync` 會安裝對應的 macOS wheel，可用 `MPS`。
-
-Windows + NVIDIA:
-- `uv sync` 會自動安裝 `cu118` wheel；仍需 NVIDIA driver 支援 CUDA 11.8。
-
-如要補齊完整 vision/TTS 執行依賴，可再加裝：
-- `ultralytics`
-- `opencv-python`
-- `mediapipe`
-- `fish-speech`
-- `torch`
-
-### Hugging Face gated model
-
-Fish Speech V1.5 與 Fish Audio S1 Mini 都是 gated model。第一次使用前要先：
-
-```bash
-hf auth login
-```
-
-但光 login 不夠；你還必須先在瀏覽器開啟你要用的模型頁面並同意條款：
-- `Fish Speech V1.5`: <https://huggingface.co/fishaudio/fish-speech-1.5>
-- `Fish Audio S1 Mini`: <https://huggingface.co/fishaudio/s1-mini>
-
-也可以改用 `HF_TOKEN=...` 啟動後端。
-
-也支援專案根目錄 `.env`：
-
-```bash
-cp .env.example .env
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-```
-
-### Ollama
-
-```bash
-ollama serve
-ollama pull llama3.1
-```
+Python 建議使用 `3.11` 或 `3.12`。
 
 ## 啟動
-
-後端：
 
 ```bash
 uv run python -m backend.app --reload
 ```
 
-如要跳過 TTS 啟動 benchmark：
+預設 API 位址是 `http://127.0.0.1:8000`。若要改 host/port：
 
 ```bash
-uv run python -m backend.app --skip-tts-benchmark
+uv run python -m backend.app --host 0.0.0.0 --port 8000
 ```
 
-如只要跑 YOLO / vision，完全不要在啟動時載入 TTS 與 Ollama：
+可用 `MOMO_SKIP_MODEL_BOOTSTRAP=1` 跳過啟動時的 YOLO model 準備。
 
-```bash
-uv run python -m backend.app --yolo-only
+## 監控視窗
+
+啟動後用瀏覽器開啟：
+
+```text
+http://127.0.0.1:8000/monitor
 ```
 
-前端：
+監控頁會顯示 Python 後端相機的標註畫面、人物 bbox、tracking mode、YOLO FPS、servo 角度、serial 狀態與最近事件。`Python Camera` 按鈕會把 camera source 切回後端 OpenCV capture。
 
-```bash
-cd frontend
-npm install
-npm run dev
+## ESP32
+
+1. 用 Arduino IDE 開啟 `esp32/sg90/sg90.ino`
+2. 安裝 `ESP32Servo`
+3. 燒錄後接上 USB serial
+4. 後端預設 `serial_port=auto`，會優先選 USB/CH340/CP210/UART 類 serial 裝置
+
+送出的 serial payload 是 compact JSON，例如：
+
+```json
+{"type":"servo","mode":"track","left_deg":100.24,"right_deg":80.1,"led_left_pct":72.5,"led_right_pct":27.5,"led_signal_loss_fade_out_ms":3000,"tracking_source":"person_center"}
 ```
-
-ESP32:
-- 用 Arduino IDE 開啟 [esp32/sg90/sg90.ino](/Users/ian/Desktop/work/job/momo/esp32/sg90/sg90.ino)
-- 安裝 `ESP32Servo`
-- 燒錄後把 serial port 填進 UI
 
 ## API
 
+- `GET /api/health`
+- `GET /` 或 `GET /monitor`
 - `GET /api/status`
 - `GET /api/config`
 - `POST /api/config`
 - `GET /api/cameras`
+- `GET /api/camera/frame.jpg`
+- `POST /api/camera/frame`
 - `GET /api/serial/ports`
-- `GET /api/ollama/models`
 - `POST /api/control/recenter-servos`
-- `POST /api/control/simulate-track`
-- `POST /api/control/simulate-pipeline`
+
+`POST /api/camera/frame` 仍可接收 JPEG bytes。若 `camera_source` 是 `browser`，後端會在處理 frame 後立即送出 servo/LED tracking command；預設路徑則是 Python/OpenCV 後端相機。
 
 ## 測試
 
 ```bash
 uv run pytest
 ```
-
-前端 build:
-
-```bash
-cd frontend
-npm run build
-```
-
-## 注意
-
-- 瀏覽器相機是目前建議路徑：由前端取得 camera 權限，持續把 JPEG frame 上傳到後端做 YOLO/face/eye tracking。
-- 若要用 backend OpenCV 直接開相機，macOS 需要對啟動後端的終端或 IDE 單獨授權 Camera。
-- Windows 預設會把 YOLO 與 Fish Audio TTS 放到 `cuda:0`，並把本程序的 CUDA 記憶體上限設成 `72%`，保留剩餘 VRAM 給 Ollama；可用 `MOMO_CUDA_MEMORY_FRACTION` 覆寫。
-- macOS 會讓 YOLO 走 `cpu`，Fish Audio TTS 走 `MPS`。
-- 預設 TTS model path 是 `model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-0.6B-Base`。
-- 也支援 `model/huggingface/hf_snapshots/fishaudio__s1-mini`；切換 model path 後，Ollama 的情緒分類清單會自動跟著目前模型切換：
-  - `Fish Speech V1.5`: 只用該模型穩定支援的 basic emotion tags
-  - `Fish Audio S1 Mini`: 用 S1 的完整固定 emotion tag 清單
-- 也支援 `model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-0.6B-Base` 與 `model/huggingface/hf_snapshots/Qwen__Qwen3-TTS-12Hz-1.7B-Base`。Qwen3-TTS 會直接走 `qwen-tts` runtime，不使用 Fish 的括號 emotion tag。
-- 也支援 `model/huggingface/hf_snapshots/hexgrad__Kokoro-82M-v1.1-zh` 與 `model/huggingface/hf_snapshots/myshell-ai__MeloTTS-Chinese`。
-  - `Kokoro-82M` 這個 option 會實際下載官方中文模型 `hexgrad/Kokoro-82M-v1.1-zh`，並在 UI 顯示 `Kokoro Chinese Voice` 參數，直接對應官方 `voice=` 用法。
-  - 切到其他 TTS model 時，`Kokoro Chinese Voice` 不會出現在 UI，也不會被其他 provider 使用。
-  - 可選 Kokoro 中文音色如下：
-    `zf_001`, `zf_002`, `zf_003`, `zf_004`, `zf_005`, `zf_006`, `zf_007`, `zf_008`, `zf_017`, `zf_018`, `zf_019`, `zf_021`, `zf_022`, `zf_023`, `zf_024`, `zf_026`, `zf_027`, `zf_028`, `zf_032`, `zf_036`, `zf_038`, `zf_039`, `zf_040`, `zf_042`, `zf_043`, `zf_044`, `zf_046`, `zf_047`, `zf_048`, `zf_049`, `zf_051`, `zf_059`, `zf_060`, `zf_067`, `zf_070`, `zf_071`, `zf_072`, `zf_073`, `zf_074`, `zf_075`, `zf_076`, `zf_077`, `zf_078`, `zf_079`, `zf_083`, `zf_084`, `zf_085`, `zf_086`, `zf_087`, `zf_088`, `zf_090`, `zf_092`, `zf_093`, `zf_094`, `zf_099`, `zm_009`, `zm_010`, `zm_011`, `zm_012`, `zm_013`, `zm_014`, `zm_015`, `zm_016`, `zm_020`, `zm_025`, `zm_029`, `zm_030`, `zm_031`, `zm_033`, `zm_034`, `zm_035`, `zm_037`, `zm_041`, `zm_045`, `zm_050`, `zm_052`, `zm_053`, `zm_054`, `zm_055`, `zm_056`, `zm_057`, `zm_058`, `zm_061`, `zm_062`, `zm_063`, `zm_064`, `zm_065`, `zm_066`, `zm_068`, `zm_069`, `zm_080`, `zm_081`, `zm_082`, `zm_089`, `zm_091`, `zm_095`, `zm_096`, `zm_097`, `zm_098`, `zm_100`
-  - `MeloTTS` 會使用 `myshell-ai/MeloTTS-Chinese` 的中文 speaker。
-  - 這兩個 provider 都會直接生成中文語音，但不支援 reference voice clone，也不使用 Fish 的 structured emotion tag。
-- Fish TTS 情緒 tag 會固定包成 `({emotion})中文句子`，括號 tag 永遠放在最前面，避免只讀出 tag 本身。
-- 若 `TTS Device` 在 UI 或 config 是 `auto`，後端啟動時會 benchmark 三個候選：
-  - 加速器單裝置：Windows `gpu` / macOS `mps`
-  - `semantic-auto-*`：只把 Fish semantic transformer 交給 `accelerate.load_checkpoint_and_dispatch(..., device_map="auto")`，decoder 仍留在單一裝置
-  - `cpu`
-- `Kokoro-82M` 與 `MeloTTS` 也會走同一套啟動 benchmark，但它們只測 `float32` candidate，不會跑 Fish/Qwen 的 `float16` / `semantic-auto-*` 變體。
-- benchmark 順序會優先試加速器，再試 `semantic-auto-*`，最後才試 `cpu`，避免在 Windows 先卡住很慢的 CPU 路線。
-- 每個 TTS benchmark candidate 都會用獨立 subprocess 跑，避免前一個 candidate 的 CUDA OOM 或殘留 VRAM 汙染下一個 candidate。
-- 若在 Windows/macOS 明確指定 `gpu` 或 `mps`，但 TTS preload 因 OOM 失敗，後端會自動退回 `auto benchmark` 路線，而不是直接把程式炸掉。
-- 單個 benchmark candidate 預設最長 `120` 秒；可用 `MOMO_TTS_BENCHMARK_TIMEOUT_SEC` 覆寫。
-- 啟動 benchmark 的優先序是：
-  - 1. 使用者在 UI 明確選的 device
-  - 2. `auto` benchmark 選出的最快 device
-  - 3. 程式原始 default
-- 當 `auto` benchmark 選出結果後，runtime 會把目前生效的 `TTS Device` 視為 benchmark 選中的 device，所以 UI 顯示的會是實際生效值，不會一直停在 `auto`。
-- `--skip-tts-benchmark` 只會跳過這段啟動 benchmark，直接使用目前 config 的 `TTS Device`。
-- `--yolo-only` 會讓後端從啟動開始就跳過 TTS model bootstrap、TTS preload、Ollama warmup、Ollama runtime status refresh，僅保留 vision / YOLO / servo 路徑。
-- UI 頂部的 YOLO / TTS / Ollama device 與 RAM / VRAM 會即時顯示目前生效裝置。
-  - Ollama 的數字來自它自己的 runtime 回報。
-  - YOLO / TTS 的數字是本程序在模型 warmup / preload 時量到的 component footprint，屬於近似值。
-- `GET /api/audio/devices` 會列出本機 output devices，UI 可直接切換播放輸出。
-- 若要把 TTS 送進 VCV Rack 2 再監聽，請把 UI 的 `Route TTS Via Virtual Device` 打開。這個模式下，程式會停用 `default` 的 native direct playback，改成把 `tmp/generated.wav` 用低延遲播放送進你指定的 output device。
-- `Route TTS Via Virtual Device = true` 時，`Audio Output` 最好不要留 `default`；請明確選擇虛擬音訊裝置，不然不同主機上的系統 default output 可能被改到實體喇叭、耳機或其他 monitor route。
-
-### VCV Rack 2 Routing
-
-macOS:
-
-1. 在系統先建立虛擬音訊裝置。常見是 `BlackHole 2ch`，如果你需要更完整的監聽與回送，也可以用 `Loopback`。
-2. 在本專案 UI 的 TTS 區塊把 `Route TTS Via Virtual Device` 設成 `true`，把 `Audio Output` 設成 `BlackHole 2ch` 或你的 `Loopback` 裝置；不要留 `default`。
-3. 開啟 VCV Rack 2，放一個 `VCV Audio` 模組，把 driver/device 指到同一個虛擬裝置；repo 送進去的 TTS 會從 `FROM DEVICE` 出來。
-4. 從 `FROM DEVICE` 接到你的效果器鏈，例如 `compressor -> filter -> reverb -> limiter`，這段就是 TTS 合成完成後的低延遲處理鏈。
-5. 把效果器鏈最後接回你的監聽輸出。若你用 `BlackHole`，通常還要在 macOS `Audio MIDI Setup` 建 `Multi-Output Device` 或 `Aggregate Device`；若你用 `Loopback`，可直接在 Loopback 內把 Rack 輸出送到耳機或喇叭。
-
-Windows:
-
-1. 在系統先建立虛擬音訊裝置。最常見是 `VB-Cable`；如果你需要更複雜的監聽與回送，也可以搭配 `VoiceMeeter` 類工具。
-2. 在本專案 UI 的 TTS 區塊把 `Route TTS Via Virtual Device` 設成 `true`，把 `Audio Output` 設成 `CABLE Input (VB-Audio Virtual Cable)` 或你實際建立的虛擬裝置；不要留 `default`。
-3. 開啟 VCV Rack 2，放一個 `VCV Audio` 模組，把 driver/device 指到同一個 `VB-Cable` 裝置；repo 送進去的 TTS 會從 `FROM DEVICE` 出來。
-4. 從 `FROM DEVICE` 接到你的效果器鏈，例如 `compressor -> EQ/filter -> delay/reverb -> limiter`，這就是 VCV Rack 內實際吃到的 TTS 音訊。
-5. 把效果器鏈最後送去你的實體監聽輸出。若只裝 `VB-Cable`，通常還要再配 `VoiceMeeter`、Windows 音效監聽或其他 routing 工具，才能一邊保留虛擬輸入、一邊把處理後聲音送到耳機或喇叭。
-
-- 前端 production build 已在 Node 22 驗證通過；Node 25 不建議使用。

@@ -31,18 +31,7 @@ def _mps_available(torch) -> bool:
     return bool(callable(mps) and mps())
 
 
-def _windows_low_vram_tts_auto(torch) -> bool:
-    if platform.system() != "Windows" or not _cuda_available(torch):
-        return False
-    try:
-        total_bytes = int(torch.cuda.get_device_properties(0).total_memory)
-        threshold_gb = float(os.getenv("MOMO_TTS_AUTO_MIN_VRAM_GB", "6.0"))
-        return total_bytes < threshold_gb * (1024 ** 3)
-    except Exception:
-        return False
-
-
-def get_torch_device(mode: str = "auto", *, component: str = "general") -> str:
+def get_torch_device(mode: str = "auto") -> str:
     try:
         import torch
     except ImportError:
@@ -58,8 +47,6 @@ def get_torch_device(mode: str = "auto", *, component: str = "general") -> str:
 
     if normalized == "cpu":
         return "cpu"
-    if normalized == "auto" and component == "tts" and _windows_low_vram_tts_auto(torch):
-        return "cpu"
     if normalized in {"gpu", "auto"} and _cuda_available(torch):
         _configure_windows_cuda_memory_fraction(torch)
         return "cuda:0"
@@ -72,19 +59,11 @@ def get_vision_device(mode: str = "auto") -> str:
         return override
     if (mode or "auto").strip().lower() == "auto" and platform.system() == "Darwin":
         return "cpu"
-    return get_torch_device(mode, component="vision")
+    return get_torch_device(mode)
 
 
 def expected_accelerator_label() -> str:
     return "mps" if platform.system() == "Darwin" else "gpu"
-
-
-def get_tts_device(mode: str = "auto") -> str:
-    return get_torch_device(mode, component="tts")
-
-
-def expected_tts_backend_label(mode: str = "auto") -> str:
-    return backend_label_for_device(get_tts_device(mode))
 
 
 def expected_vision_backend_label(mode: str = "auto") -> str:

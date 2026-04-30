@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Momo Monitor</title>
+    <link rel="stylesheet" href="/monitor/assets/monitor.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Momo Monitor</h1>
+        <p id="camera-mode">camera pending</p>
+      </div>
+      <div class="topbar-controls">
+        <span id="connection-badge" class="status-badge">connecting</span>
+        <button id="recenter-button" type="button">Recenter</button>
+      </div>
+    </header>
+
+    <main class="monitor-layout">
+      <section class="video-panel" aria-label="Camera monitor">
+        <div class="video-toolbar">
+          <label class="device-field" for="camera-device">Camera</label>
+          <input id="camera-device" name="camera-device" value="default" autocomplete="off" />
+          <button id="python-camera-button" type="button">Python Camera</button>
+        </div>
+        <div class="video-shell">
+          <img id="camera-frame" alt="Annotated camera frame" />
+          <div id="frame-empty" class="frame-empty">waiting for frame</div>
+          <div class="video-overlay">
+            <span id="mode-value">IDLE</span>
+            <span id="fps-value">0 fps</span>
+            <span id="track-value">track -</span>
+          </div>
+        </div>
+      </section>
+
+      <aside class="status-panel" aria-label="Runtime status">
+        <section class="status-section">
+          <h2>Target</h2>
+          <dl>
+            <div><dt>BBox</dt><dd id="bbox-value">-</dd></div>
+            <div><dt>Center</dt><dd id="center-value">-</dd></div>
+            <div><dt>Distance</dt><dd id="distance-value">-</dd></div>
+            <div><dt>Colors</dt><dd id="colors-value">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="status-section">
+          <h2>Servo</h2>
+          <dl>
+            <div><dt>Left</dt><dd id="left-servo-value">90.0 deg</dd></div>
+            <div><dt>Right</dt><dd id="right-servo-value">90.0 deg</dd></div>
+            <div><dt>Source</dt><dd id="tracking-source-value">none</dd></div>
+          </dl>
+        </section>
+
+        <section class="status-section">
+          <h2>Serial</h2>
+          <dl>
+            <div><dt>State</dt><dd id="serial-state-value">-</dd></div>
+            <div><dt>Port</dt><dd id="serial-port-value">-</dd></div>
+            <div><dt>Last TX</dt><dd id="serial-tx-value">-</dd></div>
+            <div><dt>Last RX</dt><dd id="serial-rx-value">-</dd></div>
+            <div><dt>Error</dt><dd id="serial-error-value">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="status-section">
+          <h2>System</h2>
+          <dl>
+            <div><dt>RAM</dt><dd id="ram-value">-</dd></div>
+            <div><dt>GPU</dt><dd id="gpu-value">-</dd></div>
+            <div><dt>Person YOLO</dt><dd id="person-runtime-value">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="status-section">
+          <h2>Events</h2>
+          <ol id="event-log" class="event-log"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <script src="/monitor/assets/monitor.js" defer></script>
+  </body>
+</html>

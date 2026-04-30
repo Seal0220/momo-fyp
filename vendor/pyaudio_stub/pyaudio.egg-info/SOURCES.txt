@@ -1,6 +1,0 @@
-pyaudio.py
-pyproject.toml
-pyaudio.egg-info/PKG-INFO
-pyaudio.egg-info/SOURCES.txt
-pyaudio.egg-info/dependency_links.txt
-pyaudio.egg-info/top_level.txt

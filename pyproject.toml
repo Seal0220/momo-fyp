@@ -1,42 +1,26 @@
 [project]
 name = "momo"
 version = "0.1.0"
-description = "Interactive audience tracking MVP with Ollama, Fish Audio TTS, and ESP32 SG90 eyes"
+description = "Interactive audience tracking backend with YOLO person detection and ESP32 SG90 eye control"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-  "accelerate>=1.10.0",
-  "cn2an==0.5.22",
   "fastapi>=0.116.0",
-  "fish-speech==0.1.0",
-  "huggingface-hub>=0.34.0",
-  "httpx>=0.28.0",
-  "jieba==0.42.1",
-  "kokoro>=0.9.4",
   "lap>=0.5.13",
-  "misaki[zh]>=0.9.4",
-  "opencc-python-reimplemented>=0.1.7",
+  "numpy>=1.26.0",
   "opencv-python>=4.11.0.86,<4.12",
   "psutil>=7.0.0",
-  "pyaudio==0.2.14",
-  "pydantic-settings>=2.10.0",
-  "pypinyin==0.50.0",
+  "pydantic>=2.11.0",
   "pyserial>=3.5",
-  "python-multipart>=0.0.20",
-  "qwen-tts==0.1.1",
-  "sounddevice>=0.5.5",
-  "soundfile>=0.13.1",
-  "torch==2.4.1",
-  "torchaudio==2.4.1",
-  "torchvision==0.19.1",
-  "typing-extensions>=4.14.0",
+  "torch==2.11.0",
+  "torchvision==0.26.0",
   "ultralytics>=8.4.27",
   "uvicorn>=0.35.0",
-  "vector-quantize-pytorch==1.14.24",
 ]
 
 [dependency-groups]
 dev = [
+  "httpx>=0.28.0",
   "pytest>=8.4.0",
 ]
 
@@ -47,18 +31,14 @@ testpaths = ["tests"]
 package = false
 
 [tool.uv.sources]
-pyaudio = { path = "vendor/pyaudio_stub" }
 torch = [
-  { index = "pytorch-cu118", marker = "sys_platform == 'win32'" },
-]
-torchaudio = [
-  { index = "pytorch-cu118", marker = "sys_platform == 'win32'" },
+  { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
 ]
 torchvision = [
-  { index = "pytorch-cu118", marker = "sys_platform == 'win32'" },
+  { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
 ]
 
 [[tool.uv.index]]
-name = "pytorch-cu118"
-url = "https://download.pytorch.org/whl/cu118"
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true

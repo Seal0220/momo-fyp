@@ -3,17 +3,14 @@ from __future__ import annotations
 import os
 import threading
 import time
-from dataclasses import dataclass
 from collections import deque
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 from backend.types import AudienceFeatures, RuntimeConfig, ServoTelemetry
-from backend.vision.actions import MotionTracker
-from backend.vision.face_eyes import FaceEyeTracker
-from backend.vision.features import classify_body_shape, classify_colors, classify_distance, focus_score, smooth_color_labels
-from backend.vision.pose_tracker import PoseTracker
+from backend.vision.features import classify_body_shape, classify_colors, classify_distance, smooth_color_labels
 from backend.vision.person_detector import PersonDetector
 
 
@@ -31,9 +28,6 @@ class VisionRuntime:
     def __init__(self, config: RuntimeConfig) -> None:
         self.config = config
         self.detector = PersonDetector(config.yolo_model_path, device_mode=config.yolo_device_mode)
-        self.eyes = FaceEyeTracker()
-        self.pose = PoseTracker(config.yolo_pose_model_path, device_mode=config.yolo_device_mode)
-        self.motion = MotionTracker()
         self.top_color_history: deque[str] = deque(maxlen=6)
         self.bottom_color_history: deque[str] = deque(maxlen=6)
         self._processed_frame_times: deque[float] = deque(maxlen=60)
@@ -78,7 +72,6 @@ class VisionRuntime:
     def reconfigure(self, config: RuntimeConfig) -> None:
         self.config = config
         self.detector = PersonDetector(config.yolo_model_path, device_mode=config.yolo_device_mode)
-        self.pose = PoseTracker(config.yolo_pose_model_path, device_mode=config.yolo_device_mode)
         self.failed_open_count = 0
         self.camera_disabled = False
         self.top_color_history.clear()
@@ -195,7 +188,7 @@ class VisionRuntime:
                 continue
             frame = self._apply_camera_orientation(frame)
             features, servo = self._process_frame(frame)
-            annotated = self._annotate(frame.copy(), features, servo)
+            annotated = self._annotate(frame.copy(), features)
             ok_jpg, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
             person_crop = self._encode_person_crop(frame, features.person_bbox)
             with self.lock:
@@ -224,7 +217,7 @@ class VisionRuntime:
             raise ValueError("invalid jpeg frame")
         frame = self._apply_camera_orientation(frame)
         features, servo = self._process_frame(frame)
-        annotated = self._annotate(frame.copy(), features, servo)
+        annotated = self._annotate(frame.copy(), features)
         ok_jpg, encoded = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
         person_crop = self._encode_person_crop(frame, features.person_bbox)
         state = VisionState(
@@ -276,40 +269,13 @@ class VisionRuntime:
             self.bottom_color_history.clear()
             return AudienceFeatures(), ServoTelemetry()
         person = max(detections, key=lambda item: item.bbox_area_ratio)
-        pose = self.pose.detect(frame, person.bbox)
-        face = self.eyes.locate(frame, person.bbox, person.center_x_norm)
-        top_color, bottom_color = classify_colors(
-            frame,
-            person.bbox,
-            face.face_bbox,
-            {
-                "left_shoulder": pose.left_shoulder_point,
-                "right_shoulder": pose.right_shoulder_point,
-                "left_hip": pose.left_hip_point,
-                "right_hip": pose.right_hip_point,
-            },
-        )
+        top_color, bottom_color = classify_colors(frame, person.bbox)
         self.top_color_history.append(top_color)
         self.bottom_color_history.append(bottom_color)
         top_color = smooth_color_labels(list(self.top_color_history), top_color)
         bottom_color = smooth_color_labels(list(self.bottom_color_history), bottom_color)
         height_class, build_class = classify_body_shape(person.bbox, frame.shape)
-        focus = focus_score(frame, face.face_bbox or person.bbox)
-        distance = classify_distance(
-            person.bbox_area_ratio,
-            self.config.lock_bbox_threshold_ratio,
-            self.config.defocus_bbox_threshold_ratio,
-        )
-        actions = self.motion.update(
-            area_ratio=person.bbox_area_ratio,
-            center_y_norm=person.center_y_norm,
-            eye_x_norm=face.eye_midpoint[0] if face.eye_midpoint else person.center_x_norm,
-            pose=pose,
-            focus_score=focus,
-            defocus_threshold=self.config.defocus_bbox_threshold_ratio,
-            focus_score_threshold=self.config.focus_score_threshold,
-            crouch_delta_threshold=self.config.crouch_delta_threshold,
-        )
+        distance = classify_distance(person.bbox_area_ratio, self.config.lock_bbox_threshold_ratio)
         features = AudienceFeatures(
             track_id=person.track_id if person.track_id >= 0 else 1,
             person_bbox=person.bbox,
@@ -321,34 +287,8 @@ class VisionRuntime:
             build_class=build_class,
             top_color=top_color,
             bottom_color=bottom_color,
-            focus_score=focus,
-            face_bbox=face.face_bbox,
-            left_eye_bbox=face.left_eye_bbox,
-            right_eye_bbox=face.right_eye_bbox,
-            eye_midpoint=face.eye_midpoint,
-            eye_confidence=face.eye_confidence,
-            pose_keypoints={
-                "nose": pose.nose_point,
-                "left_shoulder": pose.left_shoulder_point,
-                "right_shoulder": pose.right_shoulder_point,
-                "left_elbow": pose.left_elbow_point,
-                "right_elbow": pose.right_elbow_point,
-                "left_wrist": pose.left_wrist_point,
-                "right_wrist": pose.right_wrist_point,
-                "left_hip": pose.left_hip_point,
-                "right_hip": pose.right_hip_point,
-            },
-            left_wrist_point=[round(pose.left_wrist_x_norm, 4), round(pose.left_wrist_y_norm, 4)]
-            if pose.left_wrist_x_norm is not None and pose.left_wrist_y_norm is not None
-            else None,
-            right_wrist_point=[round(pose.right_wrist_x_norm, 4), round(pose.right_wrist_y_norm, 4)]
-            if pose.right_wrist_x_norm is not None and pose.right_wrist_y_norm is not None
-            else None,
-            pose_confidence=pose.pose_confidence,
-            actions=actions,
         )
-        servo = ServoTelemetry(tracking_source=face.tracking_source)
-        return features, servo
+        return features, ServoTelemetry(tracking_source="person_center")
 
     def _encode_person_crop(self, frame: np.ndarray, bbox: list[int] | None) -> bytes | None:
         if bbox is None:
@@ -367,26 +307,12 @@ class VisionRuntime:
             return None
         return encoded.tobytes()
 
-    def _annotate(self, frame: np.ndarray, features: AudienceFeatures, servo: ServoTelemetry) -> np.ndarray:
-        height, width = frame.shape[:2]
-        if features.track_id is not None:
-            if features.face_bbox:
-                self._draw_box(frame, features.face_bbox, (97, 226, 148), "Face")
-            if features.left_eye_bbox:
-                self._draw_box(frame, features.left_eye_bbox, (88, 166, 255), "L Eye")
-            if features.right_eye_bbox:
-                self._draw_box(frame, features.right_eye_bbox, (255, 122, 162), "R Eye")
-            if features.eye_midpoint:
-                x = int(features.eye_midpoint[0] * width)
-                y = int(features.eye_midpoint[1] * height)
-                cv2.circle(frame, (x, y), 5, (255, 255, 255), -1)
-            if features.left_wrist_point:
-                self._draw_point(frame, features.left_wrist_point, width, height, (255, 210, 87), "L Wrist")
-            if features.right_wrist_point:
-                self._draw_point(frame, features.right_wrist_point, width, height, (255, 148, 87), "R Wrist")
+    def _annotate(self, frame: np.ndarray, features: AudienceFeatures) -> np.ndarray:
+        if features.person_bbox:
+            self._draw_box(frame, features.person_bbox, (88, 166, 255), "Person")
         cv2.putText(
             frame,
-            f"track={features.track_id} dist={features.distance_class} focus={features.focus_score:.2f}",
+            f"track={features.track_id} dist={features.distance_class} area={features.bbox_area_ratio:.3f}",
             (20, 30),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -399,17 +325,3 @@ class VisionRuntime:
         x1, y1, x2, y2 = bbox
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         cv2.putText(frame, label, (x1, max(18, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-    def _draw_point(
-        self,
-        frame: np.ndarray,
-        point: list[float],
-        width: int,
-        height: int,
-        color: tuple[int, int, int],
-        label: str,
-    ) -> None:
-        x = int(point[0] * width)
-        y = int(point[1] * height)
-        cv2.circle(frame, (x, y), 7, color, -1)
-        cv2.putText(frame, label, (x + 10, max(18, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)

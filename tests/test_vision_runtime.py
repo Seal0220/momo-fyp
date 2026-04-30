@@ -3,8 +3,11 @@ from __future__ import annotations
 import threading
 import time
 
-import cv2
 import numpy as np
+import pytest
+
+cv2 = pytest.importorskip("cv2")
+pytest.importorskip("ultralytics")
 
 from backend.types import AudienceFeatures, RuntimeConfig, ServoTelemetry
 from backend.vision.runtime import VisionRuntime, VisionState

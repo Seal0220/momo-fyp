@@ -21,13 +21,6 @@ __pycache__/
 .coverage.*
 htmlcov/
 
-# Node / frontend
-node_modules/
-frontend/node_modules/
-dist/
-frontend/dist/
-*.tsbuildinfo
-
 # Runtime / temp / logs
 tmp/
 *.log
@@ -35,18 +28,14 @@ tmp/
 *.out
 *.err
 
-# Generated media
-*.aiff
-*.mp4
-
 # Local tools / transcripts
 .specstory/
+.ultralytics/
 
 # Models / weights / local ML caches
 *.pt
 *.pth
 *.onnx
-model/huggingface/
 model/**/*.bin
 model/**/*.safetensors
 model/**/*.jsonl

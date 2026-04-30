@@ -4,27 +4,13 @@ import cv2
 import numpy as np
 
 
-def focus_score(frame: np.ndarray, bbox: list[int]) -> float:
-    x1, y1, x2, y2 = bbox
-    roi = frame[max(0, y1):max(y1 + 1, y2), max(0, x1):max(x1 + 1, x2)]
-    if roi.size == 0:
-        return 0.0
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var() / 1000.0)
-
-
-def classify_colors(
-    frame: np.ndarray,
-    bbox: list[int],
-    face_bbox: list[int] | None = None,
-    pose_keypoints: dict[str, list[float] | None] | None = None,
-) -> tuple[str, str]:
+def classify_colors(frame: np.ndarray, bbox: list[int]) -> tuple[str, str]:
     x1, y1, x2, y2 = bbox
     roi = frame[max(0, y1):max(y1 + 1, y2), max(0, x1):max(x1 + 1, x2)]
     if roi.size == 0:
         return "unknown", "unknown"
 
-    top = _extract_top_clothing_roi(frame, bbox, face_bbox, pose_keypoints)
+    top = _extract_top_clothing_roi(frame, bbox)
     bottom = _extract_bottom_clothing_roi(frame, bbox)
     return _classify_region_color(top), _classify_region_color(bottom)
 
@@ -66,9 +52,9 @@ def classify_body_shape(bbox: list[int], frame_shape: tuple[int, int, int]) -> t
     return height_class, build_class
 
 
-def classify_distance(area_ratio: float, near_threshold: float, defocus_threshold: float) -> str:
-    if area_ratio >= defocus_threshold:
-        return "too_close"
+def classify_distance(area_ratio: float, near_threshold: float) -> str:
+    if area_ratio >= near_threshold * 2.5:
+        return "very_near"
     if area_ratio >= near_threshold:
         return "near"
     if area_ratio >= near_threshold / 2:
@@ -76,38 +62,14 @@ def classify_distance(area_ratio: float, near_threshold: float, defocus_threshol
     return "far"
 
 
-def _extract_top_clothing_roi(
-    frame: np.ndarray,
-    bbox: list[int],
-    face_bbox: list[int] | None,
-    pose_keypoints: dict[str, list[float] | None] | None,
-) -> np.ndarray:
+def _extract_top_clothing_roi(frame: np.ndarray, bbox: list[int]) -> np.ndarray:
     x1, y1, x2, y2 = bbox
     width = x2 - x1
     height = y2 - y1
     crop_x1 = x1 + int(width * 0.22)
     crop_x2 = x2 - int(width * 0.22)
-    crop_y1 = y1 + int(height * 0.40)
-    crop_y2 = y1 + int(height * 0.78)
-    if face_bbox is not None:
-        crop_y1 = max(crop_y1, face_bbox[3] + int(height * 0.02))
-    if pose_keypoints:
-        left = pose_keypoints.get("left_shoulder")
-        right = pose_keypoints.get("right_shoulder")
-        left_hip = pose_keypoints.get("left_hip")
-        right_hip = pose_keypoints.get("right_hip")
-        if left and right:
-            shoulder_left = int(min(left[0], right[0]) * frame.shape[1])
-            shoulder_right = int(max(left[0], right[0]) * frame.shape[1])
-            shoulder_y = int(min(left[1], right[1]) * frame.shape[0])
-            shoulder_span = max(1, shoulder_right - shoulder_left)
-            crop_x1 = max(crop_x1, shoulder_left - int(shoulder_span * 0.12))
-            crop_x2 = min(crop_x2, shoulder_right + int(shoulder_span * 0.12))
-            crop_y1 = max(crop_y1, shoulder_y + int(height * 0.03))
-        hips = [point for point in (left_hip, right_hip) if point]
-        if hips:
-            hip_y = int(min(point[1] for point in hips) * frame.shape[0])
-            crop_y2 = min(crop_y2, hip_y - int(height * 0.04))
+    crop_y1 = y1 + int(height * 0.38)
+    crop_y2 = y1 + int(height * 0.74)
     min_height = max(28, int(height * 0.12))
     if crop_y2 - crop_y1 < min_height:
         crop_y2 = min(frame.shape[0], crop_y1 + min_height)

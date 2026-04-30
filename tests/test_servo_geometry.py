@@ -3,7 +3,7 @@ from backend.servo.geometry import compute_servo_angles
 
 def test_servo_angles_diverge_for_left_and_right_eyes():
     telemetry = compute_servo_angles(
-        eye_midpoint_x_norm=0.7,
+        target_x_norm=0.7,
         bbox_area_ratio=0.2,
         left_zero_deg=90,
         right_zero_deg=90,
@@ -18,7 +18,7 @@ def test_servo_angles_diverge_for_left_and_right_eyes():
 
 def test_servo_eye_spacing_changes_divergence():
     narrow = compute_servo_angles(
-        eye_midpoint_x_norm=0.7,
+        target_x_norm=0.7,
         bbox_area_ratio=0.2,
         left_zero_deg=90,
         right_zero_deg=90,
@@ -27,7 +27,7 @@ def test_servo_eye_spacing_changes_divergence():
         right_limits=(45, 135),
     )
     wide = compute_servo_angles(
-        eye_midpoint_x_norm=0.7,
+        target_x_norm=0.7,
         bbox_area_ratio=0.2,
         left_zero_deg=90,
         right_zero_deg=90,
