@@ -154,15 +154,16 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
-function lerp(start, end, amount) {
-  return start + (end - start) * amount;
-}
-
-function ledColorForLevel(levelPct) {
-  const level = clamp(levelPct, 0, 100) / 100;
+function ledColorForBrightness(levelPct) {
+  const level = clamp(levelPct, 0, 100);
   const off = [244, 247, 251];
-  const on = [119, 194, 109];
-  return `rgb(${off.map((channel, index) => Math.round(lerp(channel, on[index], level))).join(", ")})`;
+  if (level <= 0) {
+    return `rgb(${off.join(", ")})`;
+  }
+  const amount = level / 100;
+  const on = [0, Math.round(155 + level), 0];
+  const channels = off.map((channel, index) => Math.round(channel + ((on[index] - channel) * amount)));
+  return `rgb(${channels.join(", ")})`;
 }
 
 function renderLedGrid(container, values, totalCount = 15) {
@@ -176,9 +177,14 @@ function renderLedGrid(container, values, totalCount = 15) {
     const cell = document.createElement("span");
     cell.className = "led-cell";
     cell.classList.toggle("on", level > 0);
-    cell.style.backgroundColor = ledColorForLevel(level);
-    cell.style.boxShadow = level > 0 ? `0 0 ${Math.max(2, level / 9).toFixed(1)}px rgba(119, 194, 109, ${Math.max(0.15, level / 100).toFixed(2)})` : "";
-    cell.textContent = String(index + 1);
+    cell.style.backgroundColor = ledColorForBrightness(level);
+    cell.style.color = "#111419";
+    cell.style.boxShadow = level > 0 ? `0 0 ${Math.max(2, level / 9).toFixed(1)}px rgba(0, 255, 0, ${Math.max(0.12, level / 100).toFixed(2)})` : "";
+    cell.dataset.level = `${Math.round(level)}%`;
+    const label = document.createElement("span");
+    label.className = "led-cell-label";
+    label.textContent = String(index + 1);
+    cell.append(label);
     cell.title = `LED ${index + 1}: ${level.toFixed(1)}%`;
     cells.push(cell);
   }
