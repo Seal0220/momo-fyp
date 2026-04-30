@@ -147,18 +147,39 @@ function lightSideLabel(side) {
   return `${state} / ${brightness} / ${cycle}`;
 }
 
-function renderLedGrid(container, indexes, totalCount = 15) {
+function clamp(value, min, max) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function lerp(start, end, amount) {
+  return start + (end - start) * amount;
+}
+
+function ledColorForLevel(levelPct) {
+  const level = clamp(levelPct, 0, 100) / 100;
+  const off = [244, 247, 251];
+  const on = [119, 194, 109];
+  return `rgb(${off.map((channel, index) => Math.round(lerp(channel, on[index], level))).join(", ")})`;
+}
+
+function renderLedGrid(container, values, totalCount = 15) {
   if (!container) {
     return;
   }
-  const active = new Set(Array.isArray(indexes) ? indexes : []);
+  const levels = Array.isArray(values) ? values : [];
   const cells = [];
   for (let index = 0; index < totalCount; index += 1) {
+    const level = clamp(Number(levels[index] || 0), 0, 100);
     const cell = document.createElement("span");
     cell.className = "led-cell";
-    cell.classList.toggle("on", active.has(index));
+    cell.classList.toggle("on", level > 0);
+    cell.style.backgroundColor = ledColorForLevel(level);
+    cell.style.boxShadow = level > 0 ? `0 0 ${Math.max(2, level / 9).toFixed(1)}px rgba(119, 194, 109, ${Math.max(0.15, level / 100).toFixed(2)})` : "";
     cell.textContent = String(index + 1);
-    cell.title = `LED ${index + 1}`;
+    cell.title = `LED ${index + 1}: ${level.toFixed(1)}%`;
     cells.push(cell);
   }
   container.replaceChildren(...cells);
@@ -297,11 +318,12 @@ function updateStatus(status) {
   fields.lightRegion.textContent = lightRegionLabels[light.region] || text(light.region);
   fields.lightLeft.textContent = lightSideLabel(light.left);
   fields.lightRight.textContent = lightSideLabel(light.right);
-  const leftLedIndexes = light.left?.active_led_indexes || [];
-  const rightLedIndexes = light.right?.active_led_indexes || [];
-  const ledTotal = Math.max(15, leftLedIndexes.length, rightLedIndexes.length);
-  renderLedGrid(fields.lightLeftLeds, leftLedIndexes, ledTotal);
-  renderLedGrid(fields.lightRightLeds, rightLedIndexes, ledTotal);
+  const ledValues = Array.isArray(light.led_values_pct) ? light.led_values_pct : [];
+  const sideLedCount = Math.max(15, Math.ceil(ledValues.length / 2));
+  const leftLedValues = ledValues.slice(0, sideLedCount);
+  const rightLedValues = ledValues.slice(sideLedCount, sideLedCount * 2);
+  renderLedGrid(fields.lightLeftLeds, leftLedValues, sideLedCount);
+  renderLedGrid(fields.lightRightLeds, rightLedValues, sideLedCount);
   const lightActiveZones = light.region === "left_right" ? ["left", "right"] : [light.region || "no_one"];
   updateZoneMap("light-zone-map", lightActiveZones);
   fields.serialState.textContent = status.serial_connected ? "connected" : "offline";
@@ -359,7 +381,7 @@ function createConfigControl(field) {
     for (const value of field.enum) {
       const option = document.createElement("option");
       option.value = value;
-      option.textContent = value;
+      option.textContent = configOptionLabel(field, value);
       select.append(option);
     }
     select.value = field.value ?? field.default ?? "";
@@ -381,6 +403,23 @@ function createConfigControl(field) {
   }
   input.value = field.value ?? "";
   return input;
+}
+
+const configOptionLabels = {
+  "camera.source": {
+    browser: "瀏覽器",
+    backend: "後端攝影機",
+  },
+  "yolo.device_mode": {
+    auto: "auto",
+    cpu: "CPU",
+    gpu: "GPU",
+    mps: "MPS",
+  },
+};
+
+function configOptionLabel(field, value) {
+  return configOptionLabels[field.key]?.[value] || value;
 }
 
 function renderRuntimeConfig() {
@@ -429,7 +468,7 @@ function renderRuntimeConfig() {
 }
 
 async function loadRuntimeConfig() {
-  configFeedback.textContent = "loading";
+  configFeedback.textContent = "載入中";
   try {
     const response = await fetch("/api/config", { cache: "no-store" });
     if (!response.ok) {
@@ -441,16 +480,16 @@ async function loadRuntimeConfig() {
     editableConfigKeys = new Set(payload.editable_keys || []);
     configValues = Object.fromEntries(configCatalog.map((field) => [field.key, field.value]));
     renderRuntimeConfig();
-    configFeedback.textContent = "ready";
+    configFeedback.textContent = "就緒";
   } catch (error) {
-    configFeedback.textContent = "config unavailable";
+    configFeedback.textContent = "無法取得設定";
   }
 }
 
 async function applyRuntimeConfig(event) {
   event.preventDefault();
   applyConfigButton.disabled = true;
-  configFeedback.textContent = "applying";
+  configFeedback.textContent = "套用中";
   const payload = {};
   for (const field of configCatalog) {
     if (!editableConfigKeys.has(field.key)) {
@@ -462,7 +501,7 @@ async function applyRuntimeConfig(event) {
     }
     const value = parseConfigValue(field, input);
     if (Number.isNaN(value)) {
-      configFeedback.textContent = `${field.label} is invalid`;
+      configFeedback.textContent = `${field.label} 格式不正確`;
       applyConfigButton.disabled = false;
       return;
     }
@@ -478,12 +517,12 @@ async function applyRuntimeConfig(event) {
       return;
     }
     configFeedback.textContent = result.effective_changes.length
-      ? `applied ${result.effective_changes.length} change(s)`
-      : "no changes";
+      ? `已套用 ${result.effective_changes.length} 項變更`
+      : "沒有變更";
     await loadRuntimeConfig();
     await refreshStatus();
   } catch (error) {
-    configFeedback.textContent = "apply failed";
+    configFeedback.textContent = "套用失敗";
   } finally {
     applyConfigButton.disabled = false;
   }

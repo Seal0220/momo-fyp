@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import random
 import time
 from dataclasses import dataclass
@@ -10,6 +9,8 @@ from backend.interaction.roi import LightRoiState
 
 LightSide = Literal["left", "right"]
 LightSideStateName = Literal["empty", "present", "super_close"]
+DEFAULT_FADE_MIN_SEC = 0.25
+DEFAULT_FADE_MAX_SEC = 2.0
 
 
 class LightConfig(Protocol):
@@ -24,6 +25,8 @@ class LightConfig(Protocol):
     present_start_brightness_level: float
     present_max_brightness_level: float
     super_close_brightness_level: float
+    fade_min_sec: float
+    fade_max_sec: float
 
 
 @dataclass(frozen=True)
@@ -144,7 +147,13 @@ class _LightSideController:
                 max_brightness_level=config.present_max_brightness_level,
             )
             active_indexes = self._active_indexes_for_cycle(now, cycle_sec, side_led_count, active_count)
-            brightness_pct = breathing_brightness_pct(now, cycle_sec, level)
+            brightness_pct = breathing_brightness_pct(
+                self._elapsed_in_current_cycle(now),
+                cycle_sec,
+                level,
+                fade_min_sec=config.fade_min_sec,
+                fade_max_sec=config.fade_max_sec,
+            )
             return LightSideOutput(
                 side=self.side,
                 state=self.state,
@@ -160,7 +169,13 @@ class _LightSideController:
         cycle_sec = config.empty_cycle_sec
         level = config.empty_brightness_level
         active_indexes = self._active_indexes_for_cycle(now, cycle_sec, side_led_count, active_count)
-        brightness_pct = breathing_brightness_pct(now, cycle_sec, level)
+        brightness_pct = breathing_brightness_pct(
+            self._elapsed_in_current_cycle(now),
+            cycle_sec,
+            level,
+            fade_min_sec=config.fade_min_sec,
+            fade_max_sec=config.fade_max_sec,
+        )
         return LightSideOutput(
             side=self.side,
             state=self.state,
@@ -211,6 +226,11 @@ class _LightSideController:
         self.cycle_started_at = None
         self.active_led_indexes.clear()
 
+    def _elapsed_in_current_cycle(self, now: float) -> float:
+        if self.cycle_started_at is None:
+            return 0.0
+        return max(0.0, now - self.cycle_started_at)
+
 
 def map_present_elapsed(
     elapsed_sec: float,
@@ -232,11 +252,46 @@ def map_present_elapsed(
     return round(cycle_sec, 3), round(brightness_level, 3)
 
 
-def breathing_brightness_pct(now: float, cycle_sec: float, brightness_level: float) -> float:
+def breathing_brightness_pct(
+    cycle_elapsed_sec: float,
+    cycle_sec: float,
+    brightness_level: float,
+    *,
+    fade_min_sec: float = DEFAULT_FADE_MIN_SEC,
+    fade_max_sec: float = DEFAULT_FADE_MAX_SEC,
+) -> float:
     cycle_sec = max(0.001, cycle_sec)
-    phase = (now % cycle_sec) / cycle_sec
-    fade = 0.5 - (0.5 * math.cos(2.0 * math.pi * phase))
+    cycle_elapsed_sec = cycle_elapsed_sec % cycle_sec
+    fade_sec = fade_duration_for_cycle(
+        cycle_sec,
+        fade_min_sec=fade_min_sec,
+        fade_max_sec=fade_max_sec,
+    )
+    if fade_sec <= 0:
+        return brightness_level_to_pct(brightness_level)
+
+    if cycle_elapsed_sec < fade_sec:
+        progress = cycle_elapsed_sec / fade_sec
+    elif cycle_elapsed_sec > cycle_sec - fade_sec:
+        progress = (cycle_sec - cycle_elapsed_sec) / fade_sec
+    else:
+        progress = 1.0
+
+    fade = smoothstep(min(max(progress, 0.0), 1.0))
     return round(brightness_level_to_pct(brightness_level) * fade, 2)
+
+
+def fade_duration_for_cycle(
+    cycle_sec: float,
+    *,
+    fade_min_sec: float = DEFAULT_FADE_MIN_SEC,
+    fade_max_sec: float = DEFAULT_FADE_MAX_SEC,
+) -> float:
+    cycle_sec = max(0.001, cycle_sec)
+    fade_min_sec = max(0.0, fade_min_sec)
+    fade_max_sec = max(fade_min_sec, fade_max_sec)
+    fade_sec = min(max(cycle_sec / 2.0, fade_min_sec), fade_max_sec)
+    return round(min(fade_sec, cycle_sec / 2.0), 3)
 
 
 def brightness_level_to_pct(level: float) -> float:
@@ -245,6 +300,10 @@ def brightness_level_to_pct(level: float) -> float:
 
 def lerp(start: float, end: float, progress: float) -> float:
     return start + ((end - start) * progress)
+
+
+def smoothstep(progress: float) -> float:
+    return progress * progress * (3.0 - (2.0 * progress))
 
 
 def _values_for_active_indexes(side_led_count: int, active_indexes: set[int], brightness_pct: float) -> list[float]:

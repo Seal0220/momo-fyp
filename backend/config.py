@@ -61,6 +61,8 @@ class RuntimeConfig(BaseModel):
         present_start_brightness_level: float = 2.0
         present_max_brightness_level: float = 8.0
         super_close_brightness_level: float = 10.0
+        fade_min_sec: float = 0.25
+        fade_max_sec: float = 2.0
 
     class Serial(BaseModel):
         port: str = "auto"
@@ -115,17 +117,17 @@ class ConfigUpdateResponse(BaseModel):
 
 
 CONFIG_GROUP_LABELS: dict[str, str] = {
-    "camera": "Camera",
+    "camera": "攝影機",
     "yolo": "YOLO",
-    "tracking": "Tracking",
-    "distance": "Distance",
-    "audio": "Audio",
-    "light": "Light",
-    "serial": "Serial",
-    "servo_calibration": "Servo Calibration",
-    "servo_motion": "Servo Motion",
+    "tracking": "追蹤",
+    "distance": "距離判定",
+    "audio": "聲音",
+    "light": "燈光",
+    "serial": "序列埠",
+    "servo_calibration": "伺服校正",
+    "servo_motion": "伺服動作",
     "led": "LED",
-    "general": "General",
+    "general": "一般",
 }
 
 CONFIG_FIELD_PATHS: dict[str, tuple[str, str]] = {
@@ -156,6 +158,8 @@ CONFIG_FIELD_PATHS: dict[str, tuple[str, str]] = {
     "light.present_start_brightness_level": ("light", "present_start_brightness_level"),
     "light.present_max_brightness_level": ("light", "present_max_brightness_level"),
     "light.super_close_brightness_level": ("light", "super_close_brightness_level"),
+    "light.fade_min_sec": ("light", "fade_min_sec"),
+    "light.fade_max_sec": ("light", "fade_max_sec"),
     "tracking.enter_debounce_ms": ("tracking", "enter_debounce_ms"),
     "tracking.exit_debounce_ms": ("tracking", "exit_debounce_ms"),
     "tracking.lost_timeout_ms": ("tracking", "lost_timeout_ms"),
@@ -209,6 +213,8 @@ LIVE_EDITABLE_CONFIG_KEYS = {
     "light.present_start_brightness_level",
     "light.present_max_brightness_level",
     "light.super_close_brightness_level",
+    "light.fade_min_sec",
+    "light.fade_max_sec",
     "tracking.enter_debounce_ms",
     "tracking.exit_debounce_ms",
     "tracking.lost_timeout_ms",
@@ -239,60 +245,62 @@ LIVE_EDITABLE_CONFIG_KEYS = {
 }
 
 FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str | None]] = {
-    "camera.source": ("Camera Source", "Choose browser-uploaded frames or backend OpenCV capture.", None),
-    "camera.device_id": ("Camera", "Camera device identifier.", None),
-    "camera.width": ("Width", "Requested camera capture width.", ">=320"),
-    "camera.height": ("Height", "Requested camera capture height.", ">=240"),
-    "camera.fps": ("FPS", "Requested camera frame rate.", "1-60"),
-    "camera.mirror_preview": ("Mirror Horizontal", "Flip the camera frame left-to-right before detection and preview.", None),
-    "camera.flip_vertical": ("Flip Vertical", "Flip the camera frame top-to-bottom before detection and preview.", None),
-    "yolo.model_path": ("YOLO Model Path", "YOLO person detection model path.", None),
-    "yolo.device_mode": ("YOLO Device", "Device mode for person detection: auto, cpu, or accelerator for this OS.", None),
-    "tracking.lock_bbox_threshold_ratio": ("Lock Threshold", "Person bbox area ratio required to enter lock mode.", "0.01-0.95"),
-    "tracking.unlock_bbox_threshold_ratio": ("Unlock Threshold", "Person bbox area ratio required to remain locked.", "0.01-0.95"),
-    "distance.near_bbox_threshold_ratio": ("Near Distance", "Person bbox area ratio classified as near.", "0.001-0.95"),
-    "distance.mid_bbox_threshold_ratio": ("Mid Distance", "Person bbox area ratio classified as mid distance.", "0.001-0.95"),
-    "audio.state_dir": ("Audio State Dir", "Folder containing no_one, left, center, right, and full audio subfolders.", None),
-    "audio.full_frame_threshold_ratio": ("Audio Full Threshold", "Single-person bbox area ratio that triggers the audio full-frame state.", "0.01-0.99"),
-    "light.side_led_count": ("LEDs Per Side", "Number of independently addressed LEDs on each side.", ">=1"),
-    "light.active_led_count_per_cycle": ("Active LEDs Per Cycle", "Random LEDs lit per side on each blinking cycle.", "1-side count"),
-    "light.super_close_bbox_threshold_ratio": ("Super Close Threshold", "Single-person bbox area ratio that triggers full light state and solid 10A output.", "0.01-0.99"),
-    "light.empty_cycle_sec": ("Empty Cycle", "Blink cycle in seconds when a side has no person.", ">0"),
-    "light.empty_brightness_level": ("Empty Level", "Brightness level for empty breathing output.", "1A-10A"),
-    "light.present_start_after_sec": ("Present Start Time", "Seconds before the present mapping begins.", ">=0"),
-    "light.present_full_after_sec": ("Present Full Time", "Seconds where present mapping reaches maximum speed and level.", "> start"),
-    "light.present_start_cycle_sec": ("Present Start Cycle", "Blink cycle when presence reaches the start time.", ">0"),
-    "light.present_min_cycle_sec": ("Present Min Cycle", "Fastest blink cycle after sustained presence.", ">0"),
-    "light.present_start_brightness_level": ("Present Start Level", "Brightness level when presence reaches the start time.", "1A-10A"),
-    "light.present_max_brightness_level": ("Present Max Level", "Brightness level after sustained presence.", "1A-10A"),
-    "light.super_close_brightness_level": ("Super Close Level", "Solid brightness level during super-close latch.", "1A-10A"),
-    "tracking.enter_debounce_ms": ("Enter Debounce", "Continuous time above threshold before locking.", ">=0"),
-    "tracking.exit_debounce_ms": ("Exit Debounce", "Continuous time below threshold before reconnecting.", ">=0"),
-    "tracking.lost_timeout_ms": ("Lost Timeout", "Time window to reconnect the same audience.", ">=0"),
-    "serial.port": ("Serial Port", "Serial device path or auto detection.", None),
-    "serial.baud_rate": ("Baud Rate", "UART speed for ESP32 serial communication.", ">=1200"),
-    "servo_calibration.left_zero_deg": ("Left Zero", "Neutral angle for the left eye servo.", "0-180"),
-    "servo_calibration.right_zero_deg": ("Right Zero", "Neutral angle for the right eye servo.", "0-180"),
-    "servo_calibration.output_inverted": ("Invert Output", "Mirror left and right servo output around each servo zero angle.", None),
-    "servo_calibration.left_trim_deg": ("Left Trim", "Fixed angle offset applied after left servo scaling.", "-90-90"),
-    "servo_calibration.right_trim_deg": ("Right Trim", "Fixed angle offset applied after right servo scaling.", "-90-90"),
-    "servo_calibration.left_gain": ("Left Gain", "Multiplier applied to the left servo delta from its zero angle.", ">0"),
-    "servo_calibration.right_gain": ("Right Gain", "Multiplier applied to the right servo delta from its zero angle.", ">0"),
-    "servo_calibration.eye_spacing_cm": ("Eye Spacing", "Distance between the two servo eyes used by the aiming geometry.", ">=1"),
-    "servo_calibration.left_min_deg": ("Left Min", "Left servo lower clamp.", "0-180"),
-    "servo_calibration.left_max_deg": ("Left Max", "Left servo upper clamp.", "0-180"),
-    "servo_calibration.right_min_deg": ("Right Min", "Right servo lower clamp.", "0-180"),
-    "servo_calibration.right_max_deg": ("Right Max", "Right servo upper clamp.", "0-180"),
-    "led.min_brightness_pct": ("LED Min", "Minimum LED brightness percentage sent to all four strips.", "0-100"),
-    "led.max_brightness_pct": ("LED Max", "Maximum LED brightness percentage sent to all four strips.", "0-100"),
-    "led.midpoint_response_gain": ("LED Midpoint Gain", "Multiplier applied to midpoint offset from screen center before LED mapping.", ">0"),
-    "led.midpoint_response_gamma": ("LED Midpoint Gamma", "Curve applied to midpoint offset after gain.", ">0"),
-    "led.midpoint_deadzone_norm": ("LED Midpoint Deadzone", "Center deadzone for midpoint offset.", "0-0.99"),
-    "led.signal_loss_fade_out_ms": ("LED Signal Loss Fade", "Fade-out time in milliseconds used by the ESP32 after serial tracking updates stop.", ">=0"),
-    "led.brightness_output_inverted": ("LED Invert", "Invert LED brightness output so 100% becomes 0% and 0% becomes 100%.", None),
-    "led.left_right_inverted": ("LED Swap Left/Right", "Swap left and right LED response to the tracked midpoint.", None),
-    "servo_motion.smoothing_alpha": ("Servo Smoothing", "One-pole smoothing factor for servo motion.", "0-1"),
-    "servo_motion.max_speed_deg_per_sec": ("Servo Max Speed", "Servo speed cap.", ">=1"),
+    "camera.source": ("影像來源", "選擇瀏覽器上傳影像或後端 OpenCV 攝影機擷取。", None),
+    "camera.device_id": ("攝影機", "攝影機裝置識別名稱。", None),
+    "camera.width": ("寬度", "攝影機擷取寬度。", ">=320"),
+    "camera.height": ("高度", "攝影機擷取高度。", ">=240"),
+    "camera.fps": ("FPS", "攝影機擷取影格率。", "1-60"),
+    "camera.mirror_preview": ("水平鏡像", "偵測與預覽前，將畫面左右翻轉。", None),
+    "camera.flip_vertical": ("垂直翻轉", "偵測與預覽前，將畫面上下翻轉。", None),
+    "yolo.model_path": ("YOLO 模型路徑", "YOLO 人物偵測模型檔案路徑。", None),
+    "yolo.device_mode": ("YOLO 執行裝置", "人物偵測使用的裝置模式：auto、cpu 或此系統可用的加速器。", None),
+    "tracking.lock_bbox_threshold_ratio": ("鎖定門檻", "人物 BBox 佔畫面比例達到此值後進入鎖定模式。", "0.01-0.95"),
+    "tracking.unlock_bbox_threshold_ratio": ("維持鎖定門檻", "人物 BBox 佔畫面比例需達到此值才維持鎖定。", "0.01-0.95"),
+    "distance.near_bbox_threshold_ratio": ("近距離門檻", "人物 BBox 佔畫面比例達到此值時判定為近。", "0.001-0.95"),
+    "distance.mid_bbox_threshold_ratio": ("中距離門檻", "人物 BBox 佔畫面比例達到此值時判定為中。", "0.001-0.95"),
+    "audio.state_dir": ("聲音狀態資料夾", "包含 no_one、left、center、right、full 子資料夾的音檔根目錄。", None),
+    "audio.full_frame_threshold_ratio": ("聲音全畫面門檻", "單一人物 BBox 佔畫面比例達到此值時觸發聲音全狀態。", "0.01-0.99"),
+    "light.side_led_count": ("單側 LED 數量", "左右單側各自可控制的 LED 數量。", ">=1"),
+    "light.active_led_count_per_cycle": ("每週期亮燈數", "每次閃爍週期中，單側隨機亮起的 LED 數量。", "1-單側數量"),
+    "light.super_close_bbox_threshold_ratio": ("超近門檻", "單一人物 BBox 佔畫面比例達到此值時，燈光進入全狀態並恆亮 10A。", "0.01-0.99"),
+    "light.empty_cycle_sec": ("無人週期", "該側無人時的閃爍週期秒數。", ">0"),
+    "light.empty_brightness_level": ("無人亮度", "該側無人時的呼吸亮度等級。", "1A-10A"),
+    "light.present_start_after_sec": ("有人起算時間", "人停留多久後開始套用有人狀態映射。", ">=0"),
+    "light.present_full_after_sec": ("有人最大時間", "人停留多久後達到最快週期與最高有人亮度。", "> 起算時間"),
+    "light.present_start_cycle_sec": ("有人起始週期", "到達起算時間時使用的閃爍週期。", ">0"),
+    "light.present_min_cycle_sec": ("有人最短週期", "持續有人後可達到的最快閃爍週期。", ">0"),
+    "light.present_start_brightness_level": ("有人起始亮度", "到達起算時間時的亮度等級。", "1A-10A"),
+    "light.present_max_brightness_level": ("有人最高亮度", "持續有人後可達到的最高亮度等級。", "1A-10A"),
+    "light.super_close_brightness_level": ("超近亮度", "超近鎖定時的恆亮亮度等級。", "1A-10A"),
+    "light.fade_min_sec": ("最短淡入淡出", "閃爍週期內單段淡入或淡出的最短秒數。", ">=0"),
+    "light.fade_max_sec": ("最長淡入淡出", "閃爍週期內單段淡入或淡出的最長秒數。", ">= 最短淡入淡出"),
+    "tracking.enter_debounce_ms": ("進入防抖", "連續高於門檻多久後才進入鎖定。", ">=0 ms"),
+    "tracking.exit_debounce_ms": ("離開防抖", "連續低於門檻多久後才重新尋找目標。", ">=0 ms"),
+    "tracking.lost_timeout_ms": ("遺失等待時間", "允許重新連回同一觀眾的等待時間。", ">=0 ms"),
+    "serial.port": ("序列埠", "序列埠路徑或 auto 自動偵測。", None),
+    "serial.baud_rate": ("Baud Rate", "ESP32 序列通訊的 UART 速度。", ">=1200"),
+    "servo_calibration.left_zero_deg": ("左眼歸零角度", "左眼 servo 的中立角度。", "0-180"),
+    "servo_calibration.right_zero_deg": ("右眼歸零角度", "右眼 servo 的中立角度。", "0-180"),
+    "servo_calibration.output_inverted": ("輸出反向", "以各自歸零角度為中心反轉左右 servo 輸出。", None),
+    "servo_calibration.left_trim_deg": ("左眼微調", "左眼 servo 縮放後額外加上的固定角度。", "-90-90"),
+    "servo_calibration.right_trim_deg": ("右眼微調", "右眼 servo 縮放後額外加上的固定角度。", "-90-90"),
+    "servo_calibration.left_gain": ("左眼增益", "左眼 servo 相對歸零角度的位移倍率。", ">0"),
+    "servo_calibration.right_gain": ("右眼增益", "右眼 servo 相對歸零角度的位移倍率。", ">0"),
+    "servo_calibration.eye_spacing_cm": ("眼距", "雙眼 servo 之間的距離，用於瞄準幾何計算。", ">=1 cm"),
+    "servo_calibration.left_min_deg": ("左眼最小角度", "左眼 servo 輸出下限。", "0-180"),
+    "servo_calibration.left_max_deg": ("左眼最大角度", "左眼 servo 輸出上限。", "0-180"),
+    "servo_calibration.right_min_deg": ("右眼最小角度", "右眼 servo 輸出下限。", "0-180"),
+    "servo_calibration.right_max_deg": ("右眼最大角度", "右眼 servo 輸出上限。", "0-180"),
+    "led.min_brightness_pct": ("LED 最低亮度", "送到 ESP32 的 LED 最低亮度百分比。", "0-100"),
+    "led.max_brightness_pct": ("LED 最高亮度", "送到 ESP32 的 LED 最高亮度百分比。", "0-100"),
+    "led.midpoint_response_gain": ("LED 中點增益", "人物中心偏移量進入 LED 映射前的倍率。", ">0"),
+    "led.midpoint_response_gamma": ("LED 中點曲線", "偏移量套用增益後的 gamma 曲線。", ">0"),
+    "led.midpoint_deadzone_norm": ("LED 中點死區", "人物中心偏移量的中央死區。", "0-0.99"),
+    "led.signal_loss_fade_out_ms": ("LED 斷訊淡出", "ESP32 停止收到序列追蹤更新後的淡出時間。", ">=0 ms"),
+    "led.brightness_output_inverted": ("LED 亮度反向", "反轉 LED 亮度輸出，100% 變 0%，0% 變 100%。", None),
+    "led.left_right_inverted": ("LED 左右交換", "交換依人物中點計算出的左右 LED 反應。", None),
+    "servo_motion.smoothing_alpha": ("Servo 平滑", "Servo 動作的一階平滑係數。", "0-1"),
+    "servo_motion.max_speed_deg_per_sec": ("Servo 最高速度", "Servo 角速度上限。", ">=1"),
 }
 
 
@@ -413,6 +421,10 @@ def validate_runtime_config(candidate: RuntimeConfig) -> list[str]:
         errors.append("light.present_max_brightness_level must be >= light.present_start_brightness_level")
     if not 1 <= candidate.light.super_close_brightness_level <= 10:
         errors.append("light.super_close_brightness_level must be between 1 and 10")
+    if candidate.light.fade_min_sec < 0:
+        errors.append("light.fade_min_sec must be >= 0")
+    if candidate.light.fade_max_sec < candidate.light.fade_min_sec:
+        errors.append("light.fade_max_sec must be >= light.fade_min_sec")
     if candidate.tracking.enter_debounce_ms < 0:
         errors.append("tracking.enter_debounce_ms must be >= 0")
     if candidate.tracking.exit_debounce_ms < 0:

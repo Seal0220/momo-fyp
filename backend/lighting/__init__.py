@@ -4,6 +4,7 @@ from backend.lighting.controller import (
     LightSideOutput,
     brightness_level_to_pct,
     breathing_brightness_pct,
+    fade_duration_for_cycle,
     map_present_elapsed,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "LightSideOutput",
     "brightness_level_to_pct",
     "breathing_brightness_pct",
+    "fade_duration_for_cycle",
     "map_present_elapsed",
 ]

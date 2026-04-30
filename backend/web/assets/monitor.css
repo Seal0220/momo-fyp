@@ -1,9 +1,22 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f4f3ed;
-  color: #171717;
+  background: #0d0f12;
+  color: #f4f7fb;
   letter-spacing: 0;
+  --page-bg: #0d0f12;
+  --panel-bg: #15181d;
+  --panel-soft: #1c2027;
+  --panel-strong: #232832;
+  --line: #343a45;
+  --line-strong: #525a68;
+  --text: #f4f7fb;
+  --muted: #aeb7c4;
+  --muted-strong: #d4dae3;
+  --green: #77c26d;
+  --yellow: #e5b84f;
+  --blue: #4fb4d8;
+  --red: #d95f59;
 }
 
 * {
@@ -16,12 +29,13 @@ body {
   height: 100dvh;
   overflow: hidden;
   background:
-    linear-gradient(#d8d5c9 1px, transparent 1px),
-    linear-gradient(90deg, #d8d5c9 1px, transparent 1px),
-    #f4f3ed;
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    var(--page-bg);
   background-size: 32px 32px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  color: var(--text);
 }
 
 button,
@@ -32,29 +46,31 @@ select {
 
 button {
   min-height: 40px;
-  border: 1px solid #171717;
-  background: #171717;
-  color: #ffffff;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-strong);
+  color: var(--text);
   padding: 0 14px;
   cursor: pointer;
 }
 
 button:hover {
-  background: #0f5f7a;
+  background: #2b5160;
+  border-color: var(--blue);
 }
 
 button:disabled {
   cursor: wait;
-  background: #77736a;
+  background: #3d424b;
+  color: var(--muted);
 }
 
 input,
 select {
   min-height: 40px;
   width: min(280px, 100%);
-  border: 1px solid #171717;
-  background: #fffef9;
-  color: #171717;
+  border: 1px solid var(--line-strong);
+  background: #111419;
+  color: var(--text);
   padding: 0 10px;
 }
 
@@ -65,8 +81,8 @@ select {
   gap: 20px;
   min-height: 84px;
   padding: 18px 24px;
-  border-bottom: 2px solid #171717;
-  background: #fffef9;
+  border-bottom: 1px solid var(--line);
+  background: rgba(21, 24, 29, 0.96);
 }
 
 .topbar h1 {
@@ -78,7 +94,7 @@ select {
 
 .topbar p {
   margin: 8px 0 0;
-  color: #4c4841;
+  color: var(--muted);
   font-size: 0.95rem;
 }
 
@@ -94,20 +110,21 @@ select {
   display: inline-flex;
   align-items: center;
   min-height: 40px;
-  border: 1px solid #171717;
-  background: #f2c14e;
+  border: 1px solid var(--line-strong);
+  background: var(--yellow);
+  color: #111419;
   padding: 0 12px;
   font-weight: 700;
   text-transform: uppercase;
 }
 
 .status-badge.ready {
-  background: #8fc17d;
+  background: var(--green);
 }
 
 .status-badge.error {
-  background: #d95f59;
-  color: #fffef9;
+  background: var(--red);
+  color: var(--text);
 }
 
 .monitor-layout {
@@ -123,15 +140,15 @@ select {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  border-right: 2px solid #171717;
-  background: #202020;
+  border-right: 1px solid var(--line);
+  background: #0b0d10;
 }
 
 .video-toolbar {
   min-height: 60px;
   padding: 10px 14px;
-  border-bottom: 2px solid #171717;
-  background: #fffef9;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-bg);
 }
 
 .video-toolbar button {
@@ -140,7 +157,7 @@ select {
 
 .device-field {
   font-weight: 700;
-  color: #35322d;
+  color: var(--muted-strong);
 }
 
 .video-shell {
@@ -150,7 +167,7 @@ select {
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  background: #111111;
+  background: #050607;
 }
 
 #camera-frame {
@@ -190,9 +207,9 @@ select {
   min-height: 40px;
   display: grid;
   place-items: center;
-  border: 1px solid #f4f3ed;
+  border: 1px solid var(--line-strong);
   background: rgba(17, 17, 17, 0.82);
-  color: #fffef9;
+  color: var(--text);
   font-weight: 700;
 }
 
@@ -211,9 +228,9 @@ select {
 }
 
 .video-overlay span {
-  border: 1px solid #fffef9;
+  border: 1px solid var(--line-strong);
   background: rgba(17, 17, 17, 0.82);
-  color: #fffef9;
+  color: var(--text);
   padding: 7px 9px;
   font-size: 0.88rem;
   font-weight: 800;
@@ -222,13 +239,15 @@ select {
 .status-panel {
   min-width: 0;
   min-height: 0;
-  background: #fffef9;
+  background: var(--panel-bg);
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-color: var(--line-strong) var(--panel-bg);
 }
 
 .status-section {
   padding: 18px 20px;
-  border-bottom: 2px solid #171717;
+  border-bottom: 1px solid var(--line);
 }
 
 .status-section h2 {
@@ -266,6 +285,7 @@ dl div {
   grid-template-columns: 100px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
+  max-width: 100%;
 }
 
 dl div.led-row-field {
@@ -273,7 +293,7 @@ dl div.led-row-field {
 }
 
 dt {
-  color: #5d5850;
+  color: var(--muted);
   font-weight: 700;
 }
 
@@ -299,8 +319,9 @@ dd {
 
 .zone-map span {
   min-width: 0;
-  border: 1px solid #171717;
-  background: #f4f3ed;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-soft);
+  color: var(--muted-strong);
   padding: 5px 4px;
   text-align: center;
   font-size: 0.72rem;
@@ -309,23 +330,28 @@ dd {
 }
 
 .zone-map span.active {
-  background: #8fc17d;
+  background: var(--green);
+  color: #111419;
 }
 
 .zone-map span.playing {
-  background: #f2c14e;
+  background: var(--yellow);
+  color: #111419;
 }
 
 .zone-map span.active.playing {
-  background: #53b3cb;
-  color: #fffef9;
+  background: var(--blue);
+  color: #071015;
 }
 
 .led-grid {
   display: grid;
-  grid-template-columns: repeat(15, minmax(18px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(18px, 1fr));
   gap: 3px;
   align-items: center;
+  width: 100%;
+  max-width: 100%;
+  overflow-wrap: normal;
 }
 
 .led-cell {
@@ -333,16 +359,19 @@ dd {
   place-items: center;
   min-width: 0;
   aspect-ratio: 1;
-  border: 1px solid #171717;
-  background: #fffef9;
-  color: #171717;
+  border: 1px solid var(--line-strong);
+  background: #f4f7fb;
+  color: #111419;
   font-size: 0.62rem;
   line-height: 1;
   font-weight: 800;
+  transition:
+    background-color 120ms linear,
+    box-shadow 120ms linear;
 }
 
 .led-cell.on {
-  background: #8fc17d;
+  border-color: var(--green);
 }
 
 .event-log {
@@ -369,7 +398,7 @@ dd {
   display: grid;
   gap: 8px;
   padding-top: 10px;
-  border-top: 1px solid #d8d5c9;
+  border-top: 1px solid var(--line);
 }
 
 .config-group:first-child {
@@ -379,7 +408,7 @@ dd {
 
 .config-group-title {
   margin: 0;
-  color: #5d5850;
+  color: var(--muted);
   font-size: 0.78rem;
   font-weight: 800;
   text-transform: uppercase;
@@ -396,7 +425,7 @@ dd {
   min-width: 0;
   font-size: 0.88rem;
   font-weight: 700;
-  color: #35322d;
+  color: var(--muted-strong);
 }
 
 .config-field input,
@@ -413,7 +442,7 @@ dd {
 
 .config-field small {
   grid-column: 2;
-  color: #6e685f;
+  color: var(--muted);
   line-height: 1.35;
 }
 
@@ -425,7 +454,7 @@ dd {
 }
 
 .config-feedback {
-  color: #5d5850;
+  color: var(--muted);
   font-size: 0.85rem;
   overflow-wrap: anywhere;
 }
@@ -450,7 +479,7 @@ dd {
 
   .video-panel {
     border-right: 0;
-    border-bottom: 2px solid #171717;
+    border-bottom: 1px solid var(--line);
   }
 
   #camera-frame {

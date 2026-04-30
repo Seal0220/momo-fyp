@@ -44,6 +44,8 @@ def test_device_mode_fields_expose_os_specific_enum():
     assert fields["light.active_led_count_per_cycle"].value == 5
     assert fields["audio.full_frame_threshold_ratio"].value == 0.35
     assert fields["light.super_close_bbox_threshold_ratio"].value == 0.35
+    assert fields["light.fade_min_sec"].value == 0.25
+    assert fields["light.fade_max_sec"].value == 2.0
 
 
 def test_invalid_light_active_led_count_detected():
@@ -52,6 +54,14 @@ def test_invalid_light_active_led_count_detected():
     errors = validate_runtime_config(config)
 
     assert "light.active_led_count_per_cycle must be <= light.side_led_count" in errors
+
+
+def test_invalid_light_fade_config_detected():
+    config = RuntimeConfig(light=RuntimeConfig.Light(fade_min_sec=2.0, fade_max_sec=1.0))
+
+    errors = validate_runtime_config(config)
+
+    assert "light.fade_max_sec must be >= light.fade_min_sec" in errors
 
 
 def test_invalid_led_brightness_config_detected():

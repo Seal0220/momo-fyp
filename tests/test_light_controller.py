@@ -8,6 +8,7 @@ from backend.lighting.controller import (
     LightController,
     breathing_brightness_pct,
     brightness_level_to_pct,
+    fade_duration_for_cycle,
     map_present_elapsed,
 )
 
@@ -25,6 +26,8 @@ class FakeLightConfig:
     present_start_brightness_level: float = 2.0
     present_max_brightness_level: float = 8.0
     super_close_brightness_level: float = 10.0
+    fade_min_sec: float = 0.25
+    fade_max_sec: float = 2.0
 
 
 def test_present_elapsed_mapping_clamps_to_requested_curve() -> None:
@@ -36,9 +39,33 @@ def test_present_elapsed_mapping_clamps_to_requested_curve() -> None:
 
 
 def test_breathing_brightness_uses_cycle_scaled_fade() -> None:
+    assert fade_duration_for_cycle(0.5) == 0.25
+    assert fade_duration_for_cycle(2.0) == 1.0
+    assert fade_duration_for_cycle(4.0) == 2.0
+    assert fade_duration_for_cycle(8.0) == 2.0
     assert breathing_brightness_pct(0.0, 2.0, 8.0) == 0.0
+    assert breathing_brightness_pct(0.5, 2.0, 8.0) == brightness_level_to_pct(8.0) / 2
     assert breathing_brightness_pct(1.0, 2.0, 8.0) == brightness_level_to_pct(8.0)
+    assert breathing_brightness_pct(1.5, 2.0, 8.0) == brightness_level_to_pct(8.0) / 2
     assert breathing_brightness_pct(2.0, 2.0, 8.0) == 0.0
+
+
+def test_light_cycle_fade_starts_from_zero_at_cycle_start() -> None:
+    controller = LightController(FakeLightConfig(empty_brightness_level=10.0), rng=random.Random(7))
+    frame = controller.update(
+        LightRoiState(
+            region="no_one",
+            left_present=False,
+            right_present=False,
+            left_super_close=False,
+            right_super_close=False,
+        ),
+        now=10.3,
+    )
+
+    assert frame.left.brightness_pct == 0.0
+    assert frame.right.brightness_pct == 0.0
+    assert all(value == 0.0 for value in frame.led_values_pct)
 
 
 def test_light_controller_outputs_30_values_with_five_active_per_side() -> None:
