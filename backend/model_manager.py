@@ -4,7 +4,7 @@ import shutil
 import urllib.request
 from pathlib import Path
 
-from backend.types import RuntimeConfig
+from backend.config import RuntimeConfig
 
 
 ULTRALYTICS_ASSET_BASE = "https://github.com/ultralytics/assets/releases/latest/download"
@@ -12,7 +12,7 @@ ULTRALYTICS_ASSET_BASE = "https://github.com/ultralytics/assets/releases/latest/
 
 def ensure_runtime_models(config: RuntimeConfig) -> list[dict[str, str]]:
     return [
-        _ensure_yolo_asset(config.yolo_model_path),
+        _ensure_yolo_asset(config.yolo.model_path),
     ]
 
 

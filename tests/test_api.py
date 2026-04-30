@@ -60,6 +60,7 @@ def test_browser_frame_upload_sends_servo_immediately():
             tracking_source: str = "person_center",
             led_left_pct: float = 50.0,
             led_right_pct: float = 50.0,
+            led_values_pct: list[float] | None = None,
             led_signal_loss_fade_out_ms: int = 3000,
         ):
             sent.append((left_deg, right_deg, mode, tracking_source, led_left_pct, led_right_pct, led_signal_loss_fade_out_ms))
@@ -71,7 +72,9 @@ def test_browser_frame_upload_sends_servo_immediately():
         def close(self):
             return None
 
-    brain.config = original_config.model_copy(update={"camera_source": "browser"})
+    brain.config = original_config.model_copy(
+        update={"camera": original_config.camera.model_copy(update={"source": "browser"})}
+    )
     brain.serial = FakeSerial()
     brain.vision.submit_jpeg_frame = lambda _: VisionState(
         features=AudienceFeatures(track_id=1, bbox_area_ratio=0.35, center_x_norm=0.72),
@@ -88,7 +91,7 @@ def test_browser_frame_upload_sends_servo_immediately():
         assert sent[0][2] == "track"
         assert sent[0][3] == "person_center"
         assert sent[0][4] < sent[0][5]
-        assert sent[0][6] == brain.config.led_signal_loss_fade_out_ms
+        assert sent[0][6] == brain.config.led.signal_loss_fade_out_ms
     finally:
         brain.vision.submit_jpeg_frame = original_submit
         brain.serial = original_serial
@@ -112,6 +115,7 @@ def test_update_mode_attempts_send_even_when_serial_marked_disconnected():
             tracking_source: str = "person_center",
             led_left_pct: float = 50.0,
             led_right_pct: float = 50.0,
+            led_values_pct: list[float] | None = None,
             led_signal_loss_fade_out_ms: int = 3000,
         ):
             sent.append((left_deg, right_deg, led_left_pct, led_right_pct, led_signal_loss_fade_out_ms))
@@ -141,7 +145,7 @@ def test_update_mode_attempts_send_even_when_serial_marked_disconnected():
 
 
 def test_update_config_returns_apply_checks():
-    response = client.post("/api/config", json={"camera_width": 640})
+    response = client.post("/api/config", json={"camera.width": 640})
 
     assert response.status_code == 200
     payload = response.json()
@@ -150,7 +154,7 @@ def test_update_config_returns_apply_checks():
 
 
 def test_update_config_validation_failure_returns_feedback():
-    response = client.post("/api/config", json={"camera_width": 100})
+    response = client.post("/api/config", json={"camera.width": 100})
 
     assert response.status_code == 200
     payload = response.json()
@@ -159,8 +163,8 @@ def test_update_config_validation_failure_returns_feedback():
 
 
 def test_update_config_can_reapply_same_payload():
-    first = client.post("/api/config", json={"camera_width": 640})
-    second = client.post("/api/config", json={"camera_width": 640})
+    first = client.post("/api/config", json={"camera.width": 640})
+    second = client.post("/api/config", json={"camera.width": 640})
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -173,11 +177,11 @@ def test_update_config_accepts_servo_eye_spacing():
     original_config = brain.config.model_copy(deep=True)
     original_serial = brain.serial
     try:
-        response = client.post("/api/config", json={"servo_eye_spacing_cm": 12})
+        response = client.post("/api/config", json={"servo_calibration.eye_spacing_cm": 12})
         assert response.status_code == 200
         payload = response.json()
         assert payload["validation_errors"] == []
-        assert payload["applied_config"]["servo_eye_spacing_cm"] == 12
+        assert payload["applied_config"]["servo_calibration"]["eye_spacing_cm"] == 12
     finally:
         brain.config = original_config
         brain.serial.close()
@@ -188,11 +192,11 @@ def test_update_config_accepts_servo_output_inverted():
     original_config = brain.config.model_copy(deep=True)
     original_serial = brain.serial
     try:
-        response = client.post("/api/config", json={"servo_output_inverted": True})
+        response = client.post("/api/config", json={"servo_calibration.output_inverted": True})
         assert response.status_code == 200
         payload = response.json()
         assert payload["validation_errors"] == []
-        assert payload["applied_config"]["servo_output_inverted"] is True
+        assert payload["applied_config"]["servo_calibration"]["output_inverted"] is True
     finally:
         brain.config = original_config
         brain.serial.close()
@@ -205,13 +209,13 @@ def test_update_config_accepts_camera_flip_toggles():
     try:
         response = client.post(
             "/api/config",
-            json={"camera_mirror_preview": True, "camera_flip_vertical": True},
+            json={"camera.mirror_preview": True, "camera.flip_vertical": True},
         )
         assert response.status_code == 200
         payload = response.json()
         assert payload["validation_errors"] == []
-        assert payload["applied_config"]["camera_mirror_preview"] is True
-        assert payload["applied_config"]["camera_flip_vertical"] is True
+        assert payload["applied_config"]["camera"]["mirror_preview"] is True
+        assert payload["applied_config"]["camera"]["flip_vertical"] is True
         assert any("hflip=on, vflip=on" in item["message"] for item in payload["apply_checks"])
     finally:
         brain.config = original_config
@@ -226,21 +230,21 @@ def test_update_config_accepts_led_output_controls():
         response = client.post(
             "/api/config",
             json={
-                "led_min_brightness_pct": 15,
-                "led_max_brightness_pct": 85,
-                "led_signal_loss_fade_out_ms": 1800,
-                "led_brightness_output_inverted": True,
-                "led_left_right_inverted": True,
+                "led.min_brightness_pct": 15,
+                "led.max_brightness_pct": 85,
+                "led.signal_loss_fade_out_ms": 1800,
+                "led.brightness_output_inverted": True,
+                "led.left_right_inverted": True,
             },
         )
         assert response.status_code == 200
         payload = response.json()
         assert payload["validation_errors"] == []
-        assert payload["applied_config"]["led_min_brightness_pct"] == 15
-        assert payload["applied_config"]["led_max_brightness_pct"] == 85
-        assert payload["applied_config"]["led_signal_loss_fade_out_ms"] == 1800
-        assert payload["applied_config"]["led_brightness_output_inverted"] is True
-        assert payload["applied_config"]["led_left_right_inverted"] is True
+        assert payload["applied_config"]["led"]["min_brightness_pct"] == 15
+        assert payload["applied_config"]["led"]["max_brightness_pct"] == 85
+        assert payload["applied_config"]["led"]["signal_loss_fade_out_ms"] == 1800
+        assert payload["applied_config"]["led"]["brightness_output_inverted"] is True
+        assert payload["applied_config"]["led"]["left_right_inverted"] is True
     finally:
         brain.config = original_config
         brain.serial.close()

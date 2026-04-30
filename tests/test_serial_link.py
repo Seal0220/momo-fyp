@@ -153,6 +153,16 @@ def test_build_servo_command_includes_led_signal_loss_fade_out_ms(monkeypatch):
         link.close()
 
 
+def test_build_servo_command_can_include_individual_led_values(monkeypatch):
+    monkeypatch.setattr("backend.serial.esp32_link.list_ports.comports", lambda: [])
+    link = ESP32Link("auto", 115200)
+    try:
+        payload = link.build_servo_command(100.0, 80.0, led_values_pct=[0, 12.345, 120])
+        assert '"led_values_pct":[0,12.35,100]' in payload
+    finally:
+        link.close()
+
+
 def test_successful_serial_activity_clears_last_error(monkeypatch):
     monkeypatch.setattr("backend.serial.esp32_link.list_ports.comports", lambda: [])
     link = ESP32Link("auto", 115200)

@@ -9,12 +9,13 @@ import pytest
 cv2 = pytest.importorskip("cv2")
 pytest.importorskip("ultralytics")
 
-from backend.types import AudienceFeatures, RuntimeConfig, ServoTelemetry
+from backend.config import RuntimeConfig
+from backend.types import AudienceFeatures, ServoTelemetry
 from backend.vision.runtime import VisionRuntime, VisionState
 
 
 def test_browser_mode_never_opens_local_capture(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="browser")))
     opened = False
 
     class FakeCapture:
@@ -51,9 +52,9 @@ def test_apply_camera_orientation_supports_horizontal_vertical_and_both_flips():
         dtype=np.uint8,
     )
 
-    horizontal = VisionRuntime(RuntimeConfig(camera_mirror_preview=True, camera_flip_vertical=False))
-    vertical = VisionRuntime(RuntimeConfig(camera_mirror_preview=False, camera_flip_vertical=True))
-    both = VisionRuntime(RuntimeConfig(camera_mirror_preview=True, camera_flip_vertical=True))
+    horizontal = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(mirror_preview=True, flip_vertical=False)))
+    vertical = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(mirror_preview=False, flip_vertical=True)))
+    both = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(mirror_preview=True, flip_vertical=True)))
 
     np.testing.assert_array_equal(horizontal._apply_camera_orientation(frame), frame[:, ::-1])
     np.testing.assert_array_equal(vertical._apply_camera_orientation(frame), frame[::-1, :])
@@ -61,7 +62,9 @@ def test_apply_camera_orientation_supports_horizontal_vertical_and_both_flips():
 
 
 def test_submit_jpeg_frame_processes_oriented_frame(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="browser", camera_mirror_preview=True, camera_flip_vertical=True))
+    runtime = VisionRuntime(
+        RuntimeConfig(camera=RuntimeConfig.Camera(source="browser", mirror_preview=True, flip_vertical=True))
+    )
     raw = np.array(
         [
             [[0, 0, 10], [0, 0, 20], [0, 0, 30]],
@@ -88,7 +91,7 @@ def test_submit_jpeg_frame_processes_oriented_frame(monkeypatch):
 
 
 def test_running_browser_mode_queues_uploaded_frame_without_inline_processing(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="browser")))
     processed: list[bytes] = []
 
     def fake_process(jpeg_bytes: bytes) -> VisionState:
@@ -106,7 +109,7 @@ def test_running_browser_mode_queues_uploaded_frame_without_inline_processing(mo
 
 
 def test_browser_loop_processes_only_latest_uploaded_frame(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="browser")))
     processed: list[bytes] = []
 
     def fake_process(jpeg_bytes: bytes) -> VisionState:
@@ -127,7 +130,7 @@ def test_browser_loop_processes_only_latest_uploaded_frame(monkeypatch):
 
 
 def test_detect_fps_reports_recent_processing_rate(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="browser")))
     now = 100.0
     monkeypatch.setattr(time, "monotonic", lambda: now)
     with runtime.lock:
@@ -137,7 +140,7 @@ def test_detect_fps_reports_recent_processing_rate(monkeypatch):
 
 
 def test_detect_fps_drops_to_zero_when_stale(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="browser"))
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="browser")))
     now = 103.5
     monkeypatch.setattr(time, "monotonic", lambda: now)
     with runtime.lock:
@@ -147,7 +150,9 @@ def test_detect_fps_drops_to_zero_when_stale(monkeypatch):
 
 
 def test_backend_capture_loop_processes_oriented_frame(monkeypatch):
-    runtime = VisionRuntime(RuntimeConfig(camera_source="backend", camera_mirror_preview=True, camera_flip_vertical=True))
+    runtime = VisionRuntime(
+        RuntimeConfig(camera=RuntimeConfig.Camera(source="backend", mirror_preview=True, flip_vertical=True))
+    )
     raw = np.array(
         [
             [[10, 0, 0], [20, 0, 0]],

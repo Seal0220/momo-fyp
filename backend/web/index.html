@@ -30,6 +30,11 @@
         </div>
         <div class="video-shell">
           <img id="camera-frame" alt="Annotated camera frame" />
+          <div class="roi-lines" aria-hidden="true">
+            <span class="roi-line roi-line-audio" style="left: 33.333%"></span>
+            <span class="roi-line roi-line-audio" style="left: 66.667%"></span>
+            <span class="roi-line roi-line-light" style="left: 50%"></span>
+          </div>
           <div id="frame-empty" class="frame-empty">waiting for frame</div>
           <div class="video-overlay">
             <span id="mode-value">IDLE</span>
@@ -44,6 +49,7 @@
           <h2>Target</h2>
           <dl>
             <div><dt>BBox</dt><dd id="bbox-value">-</dd></div>
+            <div><dt>People</dt><dd id="people-value">-</dd></div>
             <div><dt>Center</dt><dd id="center-value">-</dd></div>
             <div><dt>Distance</dt><dd id="distance-value">-</dd></div>
             <div><dt>Position</dt><dd id="position-value">-</dd></div>
@@ -57,6 +63,39 @@
             <div><dt>Left</dt><dd id="left-servo-value">90.0 deg</dd></div>
             <div><dt>Right</dt><dd id="right-servo-value">90.0 deg</dd></div>
             <div><dt>Source</dt><dd id="tracking-source-value">none</dd></div>
+          </dl>
+        </section>
+
+        <section class="status-section">
+          <h2>Audio</h2>
+          <div id="audio-zone-map" class="zone-map audio-zones">
+            <span data-zone="no_one">1-無人</span>
+            <span data-zone="left">2-左</span>
+            <span data-zone="center">3-中</span>
+            <span data-zone="right">4-右</span>
+            <span data-zone="full">5-全</span>
+          </div>
+          <dl>
+            <div><dt>Active</dt><dd id="audio-active-value">-</dd></div>
+            <div><dt>Playing</dt><dd id="audio-playing-value">-</dd></div>
+            <div><dt>Last</dt><dd id="audio-last-value">-</dd></div>
+            <div><dt>Error</dt><dd id="audio-error-value">-</dd></div>
+          </dl>
+        </section>
+
+        <section class="status-section">
+          <h2>Light</h2>
+          <div id="light-zone-map" class="zone-map light-zones">
+            <span data-zone="no_one">1-無人</span>
+            <span data-zone="left">2-左</span>
+            <span data-zone="right">3-右</span>
+            <span data-zone="full">4-全</span>
+          </div>
+          <dl>
+            <div><dt>Region</dt><dd id="light-region-value">-</dd></div>
+            <div><dt>Left</dt><dd id="light-left-value">-</dd></div>
+            <div><dt>Right</dt><dd id="light-right-value">-</dd></div>
+            <div><dt>LEDs</dt><dd id="light-leds-value">-</dd></div>
           </dl>
         </section>
 
@@ -78,6 +117,20 @@
             <div><dt>GPU</dt><dd id="gpu-value">-</dd></div>
             <div><dt>Person YOLO</dt><dd id="person-runtime-value">-</dd></div>
           </dl>
+        </section>
+
+        <section class="status-section">
+          <div class="section-heading-row">
+            <h2>Runtime Config</h2>
+            <button id="reload-config-button" type="button">Reload</button>
+          </div>
+          <form id="runtime-config-form" class="config-form">
+            <div id="runtime-config-fields" class="config-fields"></div>
+            <div class="config-actions">
+              <button id="apply-config-button" type="submit">Apply Config</button>
+              <span id="config-feedback" class="config-feedback">ready</span>
+            </div>
+          </form>
         </section>
 
         <section class="status-section">

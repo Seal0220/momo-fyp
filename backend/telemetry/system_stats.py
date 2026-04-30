@@ -14,12 +14,22 @@ class ProcessFootprint:
     vram_mb: float | None
 
 
+@dataclass(frozen=True)
+class DeviceMemoryStats:
+    device: str | None
+    name: str | None
+    allocated_mb: float | None
+    reserved_mb: float | None
+    total_mb: float | None
+
+
 def capture_process_footprint(device: str | None = None) -> ProcessFootprint:
     process = psutil.Process()
     info = process.memory_info()
+    device_memory = get_device_memory_stats(device)
     return ProcessFootprint(
         ram_mb=round(info.rss / (1024 * 1024), 2),
-        vram_mb=_device_memory_mb(device),
+        vram_mb=device_memory.reserved_mb,
     )
 
 
@@ -37,11 +47,16 @@ def get_system_stats(tmp_dir: str = "tmp") -> SystemStats:
     info = process.memory_info()
     temp_files = list(Path(tmp_dir).glob("*"))
     temp_size = sum(item.stat().st_size for item in temp_files if item.is_file())
-    footprint = capture_process_footprint()
+    device_memory = get_device_memory_stats()
     return SystemStats(
         memory_rss_mb=round(info.rss / (1024 * 1024), 2),
         memory_vms_mb=round(info.vms / (1024 * 1024), 2),
-        gpu_memory_mb=footprint.vram_mb,
+        gpu_memory_mb=device_memory.reserved_mb,
+        gpu_device=device_memory.device,
+        gpu_name=device_memory.name,
+        gpu_memory_allocated_mb=device_memory.allocated_mb,
+        gpu_memory_reserved_mb=device_memory.reserved_mb,
+        gpu_memory_total_mb=device_memory.total_mb,
         temp_file_count=len(temp_files),
         temp_file_size_mb=round(temp_size / (1024 * 1024), 2),
     )
@@ -82,32 +97,58 @@ def peak_device_memory_mb(device: str | None = None) -> float | None:
     return _device_memory_mb(resolved)
 
 
-def _device_memory_mb(device: str | None = None) -> float | None:
+def get_device_memory_stats(device: str | None = None) -> DeviceMemoryStats:
     try:
         import torch
     except ImportError:
-        return None
+        return DeviceMemoryStats(None, None, None, None, None)
 
     resolved = device or _preferred_runtime_device(torch)
     if resolved is None:
-        return None
+        return DeviceMemoryStats(None, None, None, None, None)
     if resolved.startswith("cuda") and torch.cuda.is_available():
         index = int(resolved.split(":", 1)[1]) if ":" in resolved else 0
         try:
-            return round(float(torch.cuda.memory_reserved(index)) / (1024 * 1024), 2)
+            properties = torch.cuda.get_device_properties(index)
+            total_mb = round(float(properties.total_memory) / (1024 * 1024), 2)
         except Exception:
-            return None
+            total_mb = None
+        try:
+            name = str(torch.cuda.get_device_name(index))
+        except Exception:
+            name = "CUDA GPU"
+        try:
+            allocated_mb = round(float(torch.cuda.memory_allocated(index)) / (1024 * 1024), 2)
+        except Exception:
+            allocated_mb = None
+        try:
+            reserved_mb = round(float(torch.cuda.memory_reserved(index)) / (1024 * 1024), 2)
+        except Exception:
+            reserved_mb = None
+        return DeviceMemoryStats(resolved, name, allocated_mb, reserved_mb, total_mb)
+
     if resolved == "mps":
-        mps = getattr(torch, "mps", None)
-        if mps is None:
-            return None
-        for name in ("driver_allocated_memory", "current_allocated_memory"):
-            fn = getattr(mps, name, None)
-            if callable(fn):
-                try:
-                    return round(float(fn()) / (1024 * 1024), 2)
-                except Exception:
-                    continue
+        allocated_mb = _mps_memory_mb(torch)
+        return DeviceMemoryStats(resolved, "Apple MPS", allocated_mb, allocated_mb, None)
+
+    return DeviceMemoryStats(resolved, None, None, None, None)
+
+
+def _device_memory_mb(device: str | None = None) -> float | None:
+    return get_device_memory_stats(device).reserved_mb
+
+
+def _mps_memory_mb(torch) -> float | None:
+    mps = getattr(torch, "mps", None)
+    if mps is None:
+        return None
+    for name in ("driver_allocated_memory", "current_allocated_memory"):
+        fn = getattr(mps, name, None)
+        if callable(fn):
+            try:
+                return round(float(fn()) / (1024 * 1024), 2)
+            except Exception:
+                continue
     return None
 
 

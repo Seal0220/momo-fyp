@@ -11,7 +11,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from backend.types import AudienceFeatures, RuntimeConfig, ServoTelemetry
+from backend.config import RuntimeConfig
+from backend.types import AudienceFeatures, ServoTelemetry
 from backend.vision.features import (
     classify_body_shape,
     classify_colors,
@@ -36,7 +37,7 @@ class VisionState:
 class VisionRuntime:
     def __init__(self, config: RuntimeConfig) -> None:
         self.config = config
-        self.detector = PersonDetector(config.yolo_model_path, device_mode=config.yolo_device_mode)
+        self.detector = PersonDetector(config.yolo.model_path, device_mode=config.yolo.device_mode)
         self.top_color_history: deque[str] = deque(maxlen=6)
         self.bottom_color_history: deque[str] = deque(maxlen=6)
         self._processed_frame_times: deque[float] = deque(maxlen=60)
@@ -79,7 +80,7 @@ class VisionRuntime:
 
     def reconfigure(self, config: RuntimeConfig) -> None:
         self.config = config
-        self.detector = PersonDetector(config.yolo_model_path, device_mode=config.yolo_device_mode)
+        self.detector = PersonDetector(config.yolo.model_path, device_mode=config.yolo.device_mode)
         self.failed_open_count = 0
         self.camera_disabled = False
         self.top_color_history.clear()
@@ -115,12 +116,12 @@ class VisionRuntime:
         return round((len(timestamps) - 1) / span, 2)
 
     def list_cameras(self) -> list[dict]:
-        if self.config.camera_source == "browser":
+        if self.config.camera.source == "browser":
             return [
                 {
-                    "device_id": self.config.camera_device_id,
+                    "device_id": self.config.camera.device_id,
                     "device_name": "Browser Camera",
-                    "modes": [{"width": self.config.camera_width, "height": self.config.camera_height, "fps": self.config.camera_fps}],
+                    "modes": [{"width": self.config.camera.width, "height": self.config.camera.height, "fps": self.config.camera.fps}],
                 }
             ]
         cameras: list[dict] = []
@@ -150,7 +151,7 @@ class VisionRuntime:
                 {
                     "device_id": "0",
                     "device_name": "Default Camera",
-                    "modes": [{"width": self.config.camera_width, "height": self.config.camera_height, "fps": self.config.camera_fps}],
+                    "modes": [{"width": self.config.camera.width, "height": self.config.camera.height, "fps": self.config.camera.fps}],
                 }
             )
         return cameras
@@ -159,16 +160,16 @@ class VisionRuntime:
         os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
         device_index = self._camera_device_index()
         capture = self._create_video_capture(device_index)
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera_width)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera_height)
-        capture.set(cv2.CAP_PROP_FPS, self.config.camera_fps)
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera.width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera.height)
+        capture.set(cv2.CAP_PROP_FPS, self.config.camera.fps)
         return capture
 
     def _camera_device_index(self) -> int:
-        if self.config.camera_device_id == "default":
+        if self.config.camera.device_id == "default":
             return 0
         try:
-            return int(self.config.camera_device_id)
+            return int(self.config.camera.device_id)
         except ValueError:
             return 0
 
@@ -204,7 +205,7 @@ class VisionRuntime:
 
     def _loop(self) -> None:
         while self.running:
-            if self.config.camera_source == "browser":
+            if self.config.camera.source == "browser":
                 if self.capture:
                     self._release_capture()
                 timeout = 0.2 if self.external_frame_at and time.monotonic() - self.external_frame_at < 2.0 else 0.5
@@ -252,10 +253,10 @@ class VisionRuntime:
                     target_seen_at=time.monotonic() if features.track_id is not None else self.latest_state.target_seen_at,
                 )
                 self._processed_frame_times.append(time.monotonic())
-            time.sleep(max(0.0, 1.0 / max(1, self.config.camera_fps) * 0.5))
+            time.sleep(max(0.0, 1.0 / max(1, self.config.camera.fps) * 0.5))
 
     def submit_jpeg_frame(self, jpeg_bytes: bytes) -> VisionState:
-        if self.running and self.config.camera_source == "browser":
+        if self.running and self.config.camera.source == "browser":
             self.external_frame_at = time.monotonic()
             self._queue_browser_frame(jpeg_bytes)
             return self.get_snapshot()
@@ -305,11 +306,11 @@ class VisionRuntime:
         self._browser_frame_ready.clear()
 
     def _apply_camera_orientation(self, frame: np.ndarray) -> np.ndarray:
-        if self.config.camera_mirror_preview and self.config.camera_flip_vertical:
+        if self.config.camera.mirror_preview and self.config.camera.flip_vertical:
             return cv2.flip(frame, -1)
-        if self.config.camera_mirror_preview:
+        if self.config.camera.mirror_preview:
             return cv2.flip(frame, 1)
-        if self.config.camera_flip_vertical:
+        if self.config.camera.flip_vertical:
             return cv2.flip(frame, 0)
         return frame
 
@@ -320,17 +321,24 @@ class VisionRuntime:
             self.bottom_color_history.clear()
             return AudienceFeatures(), ServoTelemetry()
         person = max(detections, key=lambda item: item.bbox_area_ratio)
+        person_bboxes = [detection.bbox for detection in detections]
         top_color, bottom_color = classify_colors(frame, person.bbox)
         self.top_color_history.append(top_color)
         self.bottom_color_history.append(bottom_color)
         top_color = smooth_color_labels(list(self.top_color_history), top_color)
         bottom_color = smooth_color_labels(list(self.bottom_color_history), bottom_color)
         height_class, build_class = classify_body_shape(person.bbox, frame.shape)
-        distance = classify_distance(person.bbox_area_ratio, self.config.lock_bbox_threshold_ratio)
+        distance = classify_distance(
+            person.bbox_area_ratio,
+            self.config.distance.near_bbox_threshold_ratio,
+            self.config.distance.mid_bbox_threshold_ratio,
+        )
         horizontal = classify_horizontal_position(person.center_x_norm)
         features = AudienceFeatures(
             track_id=person.track_id if person.track_id >= 0 else 1,
             person_bbox=person.bbox,
+            person_bboxes=person_bboxes,
+            person_count=len(detections),
             bbox_area_ratio=person.bbox_area_ratio,
             center_x_norm=person.center_x_norm,
             center_y_norm=person.center_y_norm,
@@ -362,6 +370,9 @@ class VisionRuntime:
         return encoded.tobytes()
 
     def _annotate(self, frame: np.ndarray, features: AudienceFeatures) -> np.ndarray:
+        for bbox in features.person_bboxes:
+            if bbox != features.person_bbox:
+                self._draw_box(frame, bbox, (90, 210, 120), "Person")
         if features.person_bbox:
             self._draw_box(frame, features.person_bbox, (88, 166, 255), "Person")
         cv2.putText(

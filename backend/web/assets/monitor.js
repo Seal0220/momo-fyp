@@ -6,6 +6,11 @@ const refreshCamerasButton = document.querySelector("#refresh-cameras-button");
 const applyCameraButton = document.querySelector("#apply-camera-button");
 const recenterButton = document.querySelector("#recenter-button");
 const eventLog = document.querySelector("#event-log");
+const runtimeConfigForm = document.querySelector("#runtime-config-form");
+const runtimeConfigFields = document.querySelector("#runtime-config-fields");
+const reloadConfigButton = document.querySelector("#reload-config-button");
+const applyConfigButton = document.querySelector("#apply-config-button");
+const configFeedback = document.querySelector("#config-feedback");
 
 const fields = {
   cameraMode: document.querySelector("#camera-mode"),
@@ -13,6 +18,7 @@ const fields = {
   fps: document.querySelector("#fps-value"),
   track: document.querySelector("#track-value"),
   bbox: document.querySelector("#bbox-value"),
+  people: document.querySelector("#people-value"),
   center: document.querySelector("#center-value"),
   distance: document.querySelector("#distance-value"),
   position: document.querySelector("#position-value"),
@@ -20,6 +26,14 @@ const fields = {
   leftServo: document.querySelector("#left-servo-value"),
   rightServo: document.querySelector("#right-servo-value"),
   trackingSource: document.querySelector("#tracking-source-value"),
+  audioActive: document.querySelector("#audio-active-value"),
+  audioPlaying: document.querySelector("#audio-playing-value"),
+  audioLast: document.querySelector("#audio-last-value"),
+  audioError: document.querySelector("#audio-error-value"),
+  lightRegion: document.querySelector("#light-region-value"),
+  lightLeft: document.querySelector("#light-left-value"),
+  lightRight: document.querySelector("#light-right-value"),
+  lightLeds: document.querySelector("#light-leds-value"),
   serialState: document.querySelector("#serial-state-value"),
   serialPort: document.querySelector("#serial-port-value"),
   serialTx: document.querySelector("#serial-tx-value"),
@@ -30,9 +44,39 @@ const fields = {
   personRuntime: document.querySelector("#person-runtime-value"),
 };
 
-let lastFrameOk = false;
 let hasLoadedCameras = false;
 let hasPendingCameraSelection = false;
+let frameSocket = null;
+let frameWatchdogTimer = null;
+let currentFrameUrl = null;
+let isMjpegFallbackActive = false;
+let statusSocket = null;
+let statusReconnectTimer = null;
+let configCatalog = [];
+let configGroups = {};
+let editableConfigKeys = new Set();
+let configValues = {};
+
+const audioStateOrder = ["no_one", "left", "center", "right", "full"];
+const audioStateLabels = {
+  no_one: "1-無人",
+  left: "2-左",
+  center: "3-中",
+  right: "4-右",
+  full: "5-全",
+};
+const lightRegionOrder = ["no_one", "left", "right", "full"];
+const lightRegionLabels = {
+  no_one: "1-無人",
+  left: "2-左",
+  right: "3-右",
+  full: "4-全",
+};
+const lightSideStateLabels = {
+  empty: "無人",
+  present: "有人",
+  super_close: "超近",
+};
 
 function text(value, fallback = "-") {
   if (value === null || value === undefined || value === "") {
@@ -55,6 +99,59 @@ function percent(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+function orderedLabels(values, order, labels) {
+  if (!Array.isArray(values) || !values.length) {
+    return "-";
+  }
+  const unique = new Set(values.filter(Boolean));
+  return order
+    .filter((key) => unique.has(key))
+    .concat([...unique].filter((key) => !order.includes(key)))
+    .map((key) => labels[key] || key)
+    .join(", ");
+}
+
+function updateZoneMap(mapId, activeStates, playingStates = []) {
+  const root = document.querySelector(`#${mapId}`);
+  if (!root) {
+    return;
+  }
+  const active = new Set(activeStates || []);
+  const playing = new Set(playingStates || []);
+  for (const item of root.querySelectorAll("[data-zone]")) {
+    const zone = item.dataset.zone;
+    item.classList.toggle("active", active.has(zone));
+    item.classList.toggle("playing", playing.has(zone));
+  }
+}
+
+function normalizeAudioStates(audio) {
+  if (Array.isArray(audio.active_states) && audio.active_states.length) {
+    return audio.active_states;
+  }
+  if (typeof audio.current_state === "string" && audio.current_state) {
+    return audio.current_state.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return ["no_one"];
+}
+
+function activeLedLabel(indexes) {
+  if (!Array.isArray(indexes) || !indexes.length) {
+    return "-";
+  }
+  return indexes.map((index) => String(index + 1)).join(", ");
+}
+
+function lightSideLabel(side) {
+  if (!side) {
+    return "-";
+  }
+  const state = lightSideStateLabels[side.state] || text(side.state);
+  const brightness = `${fixed(side.brightness_pct, 1)}%`;
+  const cycle = side.solid ? "solid" : `${fixed(side.cycle_sec, 2)}s`;
+  return `${state} / ${brightness} / ${cycle}`;
+}
+
 function runtimeLabel(runtime) {
   if (!runtime) {
     return "-";
@@ -62,6 +159,22 @@ function runtimeLabel(runtime) {
   const backend = runtime.backend || "unknown";
   const device = runtime.effective_device || runtime.requested_mode || "unknown";
   return `${backend} / ${device}`;
+}
+
+function gpuLabel(stats) {
+  if (!stats || !stats.gpu_device) {
+    return "-";
+  }
+  const name = stats.gpu_name || stats.gpu_device;
+  const reserved = fixed(stats.gpu_memory_reserved_mb, 1);
+  const allocated = fixed(stats.gpu_memory_allocated_mb, 1);
+  if (typeof stats.gpu_memory_total_mb === "number") {
+    return `${name}: ${reserved} / ${fixed(stats.gpu_memory_total_mb, 0)} MB reserved (${allocated} MB active)`;
+  }
+  if (typeof stats.gpu_memory_reserved_mb === "number") {
+    return `${name}: ${reserved} MB reserved (${allocated} MB active)`;
+  }
+  return `${name}: memory unavailable`;
 }
 
 function cameraLabel(camera) {
@@ -139,7 +252,11 @@ function updateStatus(status) {
   const servo = status.servo || {};
   const serial = status.serial_monitor || {};
   const stats = status.stats || {};
+  const audio = status.position_audio || {};
+  const light = status.light || {};
   const cameraDeviceId = status.camera_device_id || "default";
+  const activeAudioStates = normalizeAudioStates(audio);
+  const playingAudioStates = Array.isArray(audio.playing_states) ? audio.playing_states : [];
 
   fields.cameraMode.textContent = `${text(status.camera_device_id)} / ${text(status.camera_mode)}`;
   if (hasLoadedCameras && !hasPendingCameraSelection) {
@@ -150,6 +267,7 @@ function updateStatus(status) {
   fields.fps.textContent = `${fixed(status.yolo_detect_fps, 1)} fps`;
   fields.track.textContent = `track ${text(audience.track_id)}`;
   fields.bbox.textContent = audience.person_bbox ? audience.person_bbox.join(", ") : "-";
+  fields.people.textContent = typeof audience.person_count === "number" ? String(audience.person_count) : "-";
   fields.center.textContent = `${fixed(audience.center_x_norm, 3)}, ${fixed(audience.center_y_norm, 3)}`;
   fields.distance.textContent = `${text(audience.distance_class)} (${percent(audience.bbox_area_ratio)})`;
   fields.position.textContent = `${text(audience.position_state)} / ${text(audience.horizontal_class)}`;
@@ -157,13 +275,25 @@ function updateStatus(status) {
   fields.leftServo.textContent = `${fixed(servo.left_deg, 1)} deg`;
   fields.rightServo.textContent = `${fixed(servo.right_deg, 1)} deg`;
   fields.trackingSource.textContent = text(servo.tracking_source);
+  fields.audioActive.textContent = orderedLabels(activeAudioStates, audioStateOrder, audioStateLabels);
+  fields.audioPlaying.textContent = orderedLabels(playingAudioStates, audioStateOrder, audioStateLabels);
+  fields.audioLast.textContent = audio.last_triggered_state
+    ? `${audioStateLabels[audio.last_triggered_state] || audio.last_triggered_state} / ${text(audio.last_audio_file)}`
+    : "-";
+  fields.audioError.textContent = text(audio.last_error);
+  updateZoneMap("audio-zone-map", activeAudioStates, playingAudioStates);
+  fields.lightRegion.textContent = lightRegionLabels[light.region] || text(light.region);
+  fields.lightLeft.textContent = lightSideLabel(light.left);
+  fields.lightRight.textContent = lightSideLabel(light.right);
+  fields.lightLeds.textContent = `L ${activeLedLabel(light.left?.active_led_indexes)} / R ${activeLedLabel(light.right?.active_led_indexes)}`;
+  updateZoneMap("light-zone-map", [light.region || "no_one"]);
   fields.serialState.textContent = status.serial_connected ? "connected" : "offline";
   fields.serialPort.textContent = text(serial.port);
   fields.serialTx.textContent = text(serial.last_tx);
   fields.serialRx.textContent = text(serial.last_rx);
   fields.serialError.textContent = text(serial.last_error);
   fields.ram.textContent = `${fixed(stats.memory_rss_mb, 1)} MB`;
-  fields.gpu.textContent = stats.gpu_memory_mb === null ? "-" : `${fixed(stats.gpu_memory_mb, 1)} MB`;
+  fields.gpu.textContent = gpuLabel(stats);
   fields.personRuntime.textContent = runtimeLabel(status.yolo_person_runtime);
 
   eventLog.replaceChildren(
@@ -189,17 +319,319 @@ async function refreshStatus() {
   }
 }
 
-function refreshFrame() {
-  frame.src = `/api/camera/frame.jpg?t=${Date.now()}`;
+function parseConfigValue(field, input) {
+  if (field.type === "boolean") {
+    return input.checked;
+  }
+  if (input.value === "" && field.value === null) {
+    return null;
+  }
+  if (field.type === "int") {
+    return Number.parseInt(input.value, 10);
+  }
+  if (field.type === "float") {
+    return Number.parseFloat(input.value);
+  }
+  return input.value;
+}
+
+function createConfigControl(field) {
+  if (field.enum && field.enum.length) {
+    const select = document.createElement("select");
+    select.name = field.key;
+    for (const value of field.enum) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.append(option);
+    }
+    select.value = field.value ?? field.default ?? "";
+    return select;
+  }
+  const input = document.createElement("input");
+  input.name = field.key;
+  if (field.type === "boolean") {
+    input.type = "checkbox";
+    input.checked = Boolean(field.value);
+    return input;
+  }
+  input.type = field.type === "int" || field.type === "float" ? "number" : "text";
+  if (field.type === "float") {
+    input.step = "0.001";
+  }
+  if (field.type === "int") {
+    input.step = "1";
+  }
+  input.value = field.value ?? "";
+  return input;
+}
+
+function renderRuntimeConfig() {
+  runtimeConfigFields.replaceChildren();
+  const fieldsByGroup = new Map();
+  for (const field of configCatalog) {
+    if (!editableConfigKeys.has(field.key)) {
+      continue;
+    }
+    const group = field.applies_to || "general";
+    if (!fieldsByGroup.has(group)) {
+      fieldsByGroup.set(group, []);
+    }
+    fieldsByGroup.get(group).push(field);
+  }
+
+  for (const [group, fields] of fieldsByGroup.entries()) {
+    const groupEl = document.createElement("section");
+    groupEl.className = "config-group";
+    const title = document.createElement("h3");
+    title.className = "config-group-title";
+    title.textContent = configGroups[group] || group;
+    groupEl.append(title);
+
+    for (const field of fields) {
+      const row = document.createElement("div");
+      row.className = "config-field";
+      const label = document.createElement("label");
+      label.htmlFor = `config-${field.key}`;
+      label.textContent = field.label;
+      const control = createConfigControl(field);
+      control.id = `config-${field.key}`;
+      control.dataset.configKey = field.key;
+      control.title = field.description;
+      row.append(label, control);
+      if (field.valid_range) {
+        const hint = document.createElement("small");
+        hint.textContent = field.valid_range;
+        row.append(hint);
+      }
+      groupEl.append(row);
+    }
+
+    runtimeConfigFields.append(groupEl);
+  }
+}
+
+async function loadRuntimeConfig() {
+  configFeedback.textContent = "loading";
+  try {
+    const response = await fetch("/api/config", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`config ${response.status}`);
+    }
+    const payload = await response.json();
+    configCatalog = payload.fields || [];
+    configGroups = payload.groups || {};
+    editableConfigKeys = new Set(payload.editable_keys || []);
+    configValues = Object.fromEntries(configCatalog.map((field) => [field.key, field.value]));
+    renderRuntimeConfig();
+    configFeedback.textContent = "ready";
+  } catch (error) {
+    configFeedback.textContent = "config unavailable";
+  }
+}
+
+async function applyRuntimeConfig(event) {
+  event.preventDefault();
+  applyConfigButton.disabled = true;
+  configFeedback.textContent = "applying";
+  const payload = {};
+  for (const field of configCatalog) {
+    if (!editableConfigKeys.has(field.key)) {
+      continue;
+    }
+    const input = runtimeConfigForm.elements[field.key];
+    if (!input) {
+      continue;
+    }
+    const value = parseConfigValue(field, input);
+    if (Number.isNaN(value)) {
+      configFeedback.textContent = `${field.label} is invalid`;
+      applyConfigButton.disabled = false;
+      return;
+    }
+    if (value !== configValues[field.key]) {
+      payload[field.key] = value;
+    }
+  }
+
+  try {
+    const result = await postJson("/api/config", payload);
+    if (result.validation_errors && result.validation_errors.length) {
+      configFeedback.textContent = result.validation_errors.join("; ");
+      return;
+    }
+    configFeedback.textContent = result.effective_changes.length
+      ? `applied ${result.effective_changes.length} change(s)`
+      : "no changes";
+    await loadRuntimeConfig();
+    await refreshStatus();
+  } catch (error) {
+    configFeedback.textContent = "apply failed";
+  } finally {
+    applyConfigButton.disabled = false;
+  }
+}
+
+function statusSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/status/ws`;
+}
+
+function scheduleStatusReconnect() {
+  if (statusReconnectTimer !== null) {
+    return;
+  }
+  statusReconnectTimer = window.setTimeout(() => {
+    statusReconnectTimer = null;
+    connectStatusStream();
+  }, 1200);
+}
+
+function connectStatusStream() {
+  if (statusReconnectTimer !== null) {
+    window.clearTimeout(statusReconnectTimer);
+    statusReconnectTimer = null;
+  }
+  const previousSocket = statusSocket;
+  statusSocket = null;
+  if (previousSocket && previousSocket.readyState <= WebSocket.OPEN) {
+    previousSocket.close();
+  }
+  const socket = new WebSocket(statusSocketUrl());
+  statusSocket = socket;
+
+  socket.addEventListener("open", () => {
+    if (socket !== statusSocket) {
+      return;
+    }
+    setBadge("ready", "monitoring");
+  });
+
+  socket.addEventListener("message", (event) => {
+    if (socket !== statusSocket) {
+      return;
+    }
+    updateStatus(JSON.parse(event.data));
+  });
+
+  socket.addEventListener("close", () => {
+    if (socket !== statusSocket) {
+      return;
+    }
+    setBadge("error", "status reconnecting");
+    scheduleStatusReconnect();
+  });
+
+  socket.addEventListener("error", () => {
+    if (socket === statusSocket) {
+      socket.close();
+    }
+  });
+}
+
+function cameraSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/api/camera/ws`;
+}
+
+function clearFrameWatchdog() {
+  if (frameWatchdogTimer !== null) {
+    window.clearTimeout(frameWatchdogTimer);
+    frameWatchdogTimer = null;
+  }
+}
+
+function scheduleFrameWatchdog(socket) {
+  clearFrameWatchdog();
+  frameWatchdogTimer = window.setTimeout(() => {
+    frameWatchdogTimer = null;
+    if (socket === frameSocket) {
+      useMjpegFrameStream("using mjpeg frame stream");
+    }
+  }, 2500);
+}
+
+function useMjpegFrameStream(message = "waiting for frame") {
+  if (isMjpegFallbackActive) {
+    return;
+  }
+  isMjpegFallbackActive = true;
+  clearFrameWatchdog();
+  const previousSocket = frameSocket;
+  frameSocket = null;
+  if (previousSocket && previousSocket.readyState <= WebSocket.OPEN) {
+    previousSocket.close();
+  }
+  if (currentFrameUrl) {
+    URL.revokeObjectURL(currentFrameUrl);
+    currentFrameUrl = null;
+  }
+  frameEmpty.textContent = message;
+  frameEmpty.classList.remove("hidden");
+  frame.src = `/api/camera/stream.mjpg?t=${Date.now()}`;
+}
+
+function showFrameBlob(blob) {
+  clearFrameWatchdog();
+  isMjpegFallbackActive = false;
+  const previousUrl = currentFrameUrl;
+  currentFrameUrl = URL.createObjectURL(blob);
+  frame.src = currentFrameUrl;
+  frameEmpty.classList.add("hidden");
+  if (previousUrl) {
+    window.setTimeout(() => URL.revokeObjectURL(previousUrl), 1000);
+  }
+}
+
+function connectFrameStream() {
+  const previousSocket = frameSocket;
+  frameSocket = null;
+  isMjpegFallbackActive = false;
+  clearFrameWatchdog();
+  if (previousSocket && previousSocket.readyState <= WebSocket.OPEN) {
+    previousSocket.close();
+  }
+  const socket = new WebSocket(cameraSocketUrl());
+  frameSocket = socket;
+  socket.binaryType = "blob";
+
+  socket.addEventListener("open", () => {
+    if (socket !== frameSocket) {
+      return;
+    }
+    frameEmpty.textContent = "waiting for frame";
+    scheduleFrameWatchdog(socket);
+  });
+
+  socket.addEventListener("message", (event) => {
+    if (socket !== frameSocket) {
+      return;
+    }
+    if (event.data instanceof Blob) {
+      showFrameBlob(event.data);
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    if (socket !== frameSocket) {
+      return;
+    }
+    clearFrameWatchdog();
+    useMjpegFrameStream("using mjpeg frame stream");
+  });
+
+  socket.addEventListener("error", () => {
+    if (socket === frameSocket) {
+      socket.close();
+    }
+  });
 }
 
 frame.addEventListener("load", () => {
-  lastFrameOk = true;
   frameEmpty.classList.add("hidden");
 });
 
 frame.addEventListener("error", () => {
-  lastFrameOk = false;
   frameEmpty.textContent = "waiting for frame";
   frameEmpty.classList.remove("hidden");
 });
@@ -228,12 +660,12 @@ applyCameraButton.addEventListener("click", async () => {
   applyCameraButton.disabled = true;
   try {
     await postJson("/api/config", {
-      camera_source: "backend",
-      camera_device_id: cameraDevice.value || "default",
+      "camera.source": "backend",
+      "camera.device_id": cameraDevice.value || "default",
     });
     hasPendingCameraSelection = false;
     await refreshStatus();
-    refreshFrame();
+    connectFrameStream();
   } finally {
     applyCameraButton.disabled = false;
   }
@@ -249,12 +681,13 @@ recenterButton.addEventListener("click", async () => {
   }
 });
 
+runtimeConfigForm.addEventListener("submit", applyRuntimeConfig);
+
+reloadConfigButton.addEventListener("click", async () => {
+  await loadRuntimeConfig();
+});
+
 refreshCameraList();
-refreshStatus();
-refreshFrame();
-setInterval(refreshStatus, 500);
-setInterval(() => {
-  if (lastFrameOk || !document.hidden) {
-    refreshFrame();
-  }
-}, 250);
+loadRuntimeConfig();
+connectStatusStream();
+connectFrameStream();

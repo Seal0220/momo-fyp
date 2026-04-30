@@ -12,15 +12,19 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background:
     linear-gradient(#d8d5c9 1px, transparent 1px),
     linear-gradient(90deg, #d8d5c9 1px, transparent 1px),
     #f4f3ed;
   background-size: 32px 32px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 button,
+input,
 select {
   font: inherit;
 }
@@ -43,6 +47,7 @@ button:disabled {
   background: #77736a;
 }
 
+input,
 select {
   min-height: 40px;
   width: min(280px, 100%);
@@ -107,13 +112,15 @@ select {
 .monitor-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
-  min-height: calc(100vh - 84px);
+  min-height: 0;
+  height: 100%;
 }
 
 .video-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
   border-right: 2px solid #171717;
   background: #202020;
 }
@@ -138,7 +145,7 @@ select {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 360px;
+  min-height: 0;
   overflow: hidden;
   background: #111111;
 }
@@ -146,9 +153,29 @@ select {
 #camera-frame {
   width: 100%;
   height: 100%;
-  max-height: calc(100vh - 146px);
   object-fit: contain;
   display: block;
+}
+
+.roi-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.roi-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+
+.roi-line-audio {
+  border-left: 2px dashed rgba(242, 193, 78, 0.82);
+}
+
+.roi-line-light {
+  border-left: 2px solid rgba(83, 179, 203, 0.82);
 }
 
 .frame-empty {
@@ -188,8 +215,9 @@ select {
 
 .status-panel {
   min-width: 0;
+  min-height: 0;
   background: #fffef9;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .status-section {
@@ -201,6 +229,24 @@ select {
   margin: 0 0 12px;
   font-size: 0.95rem;
   text-transform: uppercase;
+}
+
+.section-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.section-heading-row h2 {
+  margin: 0;
+}
+
+.section-heading-row button,
+.config-actions button {
+  min-height: 34px;
+  padding: 0 10px;
 }
 
 dl {
@@ -227,6 +273,44 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.zone-map {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.audio-zones {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.light-zones {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.zone-map span {
+  min-width: 0;
+  border: 1px solid #171717;
+  background: #f4f3ed;
+  padding: 5px 4px;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.zone-map span.active {
+  background: #8fc17d;
+}
+
+.zone-map span.playing {
+  background: #f2c14e;
+}
+
+.zone-map span.active.playing {
+  background: #53b3cb;
+  color: #fffef9;
+}
+
 .event-log {
   margin: 0;
   padding-left: 20px;
@@ -237,7 +321,89 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.config-form {
+  display: grid;
+  gap: 14px;
+}
+
+.config-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.config-group {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #d8d5c9;
+}
+
+.config-group:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.config-group-title {
+  margin: 0;
+  color: #5d5850;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.config-field {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.9fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.config-field label {
+  min-width: 0;
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #35322d;
+}
+
+.config-field input,
+.config-field select {
+  width: 100%;
+  min-width: 0;
+}
+
+.config-field input[type="checkbox"] {
+  justify-self: start;
+  width: 22px;
+  min-height: 22px;
+}
+
+.config-field small {
+  grid-column: 2;
+  color: #6e685f;
+  line-height: 1.35;
+}
+
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.config-feedback {
+  color: #5d5850;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 900px) {
+  body {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+    display: block;
+  }
+
   .topbar {
     align-items: flex-start;
     flex-direction: column;
@@ -245,6 +411,7 @@ dd {
 
   .monitor-layout {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .video-panel {
@@ -254,5 +421,9 @@ dd {
 
   #camera-frame {
     max-height: 62vh;
+  }
+
+  .video-shell {
+    min-height: 360px;
   }
 }

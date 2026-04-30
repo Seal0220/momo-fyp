@@ -1,24 +1,26 @@
 import platform
 
-from backend.config import build_field_catalog, validate_runtime_config
-from backend.types import RuntimeConfig
+from backend.config import RuntimeConfig, build_field_catalog, validate_runtime_config
 
 
 def test_default_config_is_vision_and_arduino_only():
     config = RuntimeConfig()
 
-    assert config.camera_source == "backend"
-    assert config.yolo_device_mode == "auto"
-    assert config.serial_port == "auto"
-    assert config.serial_baud_rate == 115200
+    assert config.camera.source == "backend"
+    assert config.yolo.device_mode == "auto"
+    assert config.serial.port == "auto"
+    assert config.serial.baud_rate == 115200
 
 
 def test_invalid_config_detected():
-    config = RuntimeConfig(camera_width=100, serial_baud_rate=300)
+    config = RuntimeConfig(
+        camera=RuntimeConfig.Camera(width=100),
+        serial=RuntimeConfig.Serial(baud_rate=300),
+    )
     errors = validate_runtime_config(config)
 
-    assert any("camera_width" in item for item in errors)
-    assert any("serial_baud_rate" in item for item in errors)
+    assert any("camera.width" in item for item in errors)
+    assert any("serial.baud_rate" in item for item in errors)
 
 
 def test_device_mode_fields_expose_os_specific_enum():
@@ -26,43 +28,70 @@ def test_device_mode_fields_expose_os_specific_enum():
     fields = {field.key: field for field in build_field_catalog(config)}
     accelerator = "mps" if platform.system() == "Darwin" else "gpu"
 
-    assert fields["camera_flip_vertical"].type == "boolean"
-    assert fields["yolo_device_mode"].enum == ["auto", "cpu", accelerator]
-    assert fields["led_min_brightness_pct"].type == "float"
-    assert fields["led_max_brightness_pct"].type == "float"
-    assert fields["led_midpoint_response_gain"].type == "float"
-    assert fields["led_midpoint_response_gamma"].type == "float"
-    assert fields["led_midpoint_deadzone_norm"].type == "float"
-    assert fields["led_signal_loss_fade_out_ms"].type == "int"
-    assert fields["led_brightness_output_inverted"].type == "boolean"
-    assert fields["led_left_right_inverted"].type == "boolean"
+    assert fields["camera.flip_vertical"].type == "boolean"
+    assert fields["yolo.device_mode"].enum == ["auto", "cpu", accelerator]
+    assert fields["led.min_brightness_pct"].type == "float"
+    assert fields["led.max_brightness_pct"].type == "float"
+    assert fields["led.midpoint_response_gain"].type == "float"
+    assert fields["led.midpoint_response_gamma"].type == "float"
+    assert fields["led.midpoint_deadzone_norm"].type == "float"
+    assert fields["led.signal_loss_fade_out_ms"].type == "int"
+    assert fields["led.brightness_output_inverted"].type == "boolean"
+    assert fields["led.left_right_inverted"].type == "boolean"
+    assert fields["distance.near_bbox_threshold_ratio"].type == "float"
+    assert fields["distance.mid_bbox_threshold_ratio"].type == "float"
+    assert fields["light.side_led_count"].value == 15
+    assert fields["light.active_led_count_per_cycle"].value == 5
+
+
+def test_invalid_light_active_led_count_detected():
+    config = RuntimeConfig(light=RuntimeConfig.Light(side_led_count=4, active_led_count_per_cycle=5))
+
+    errors = validate_runtime_config(config)
+
+    assert "light.active_led_count_per_cycle must be <= light.side_led_count" in errors
 
 
 def test_invalid_led_brightness_config_detected():
-    config = RuntimeConfig(led_min_brightness_pct=90, led_max_brightness_pct=10)
+    config = RuntimeConfig(led=RuntimeConfig.Led(min_brightness_pct=90, max_brightness_pct=10))
 
     errors = validate_runtime_config(config)
 
-    assert "led_min_brightness_pct must be <= led_max_brightness_pct" in errors
+    assert "led.min_brightness_pct must be <= led.max_brightness_pct" in errors
 
 
 def test_invalid_led_signal_loss_fade_out_config_detected():
-    config = RuntimeConfig(led_signal_loss_fade_out_ms=-1)
+    config = RuntimeConfig(led=RuntimeConfig.Led(signal_loss_fade_out_ms=-1))
 
     errors = validate_runtime_config(config)
 
-    assert "led_signal_loss_fade_out_ms must be >= 0" in errors
+    assert "led.signal_loss_fade_out_ms must be >= 0" in errors
 
 
 def test_invalid_led_midpoint_response_config_detected():
     config = RuntimeConfig(
-        led_midpoint_response_gain=0,
-        led_midpoint_response_gamma=0,
-        led_midpoint_deadzone_norm=1,
+        led=RuntimeConfig.Led(
+            midpoint_response_gain=0,
+            midpoint_response_gamma=0,
+            midpoint_deadzone_norm=1,
+        )
     )
 
     errors = validate_runtime_config(config)
 
-    assert "led_midpoint_response_gain must be > 0" in errors
-    assert "led_midpoint_response_gamma must be > 0" in errors
-    assert "led_midpoint_deadzone_norm must be between 0 and 1 (exclusive of 1)" in errors
+    assert "led.midpoint_response_gain must be > 0" in errors
+    assert "led.midpoint_response_gamma must be > 0" in errors
+    assert "led.midpoint_deadzone_norm must be between 0 and 1 (exclusive of 1)" in errors
+
+
+def test_invalid_distance_threshold_config_detected():
+    config = RuntimeConfig(
+        distance=RuntimeConfig.Distance(
+            near_bbox_threshold_ratio=0.02,
+            mid_bbox_threshold_ratio=0.03,
+        )
+    )
+
+    errors = validate_runtime_config(config)
+
+    assert "distance.mid_bbox_threshold_ratio must be < distance.near_bbox_threshold_ratio" in errors

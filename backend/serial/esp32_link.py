@@ -116,19 +116,26 @@ class ESP32Link:
         tracking_source: str = "person_center",
         led_left_pct: float = 50.0,
         led_right_pct: float = 50.0,
+        led_values_pct: list[float] | None = None,
         led_signal_loss_fade_out_ms: int = 3000,
     ) -> str:
+        payload = {
+            "type": "servo",
+            "mode": mode,
+            "left_deg": round(left_deg, 2),
+            "right_deg": round(right_deg, 2),
+            "led_left_pct": round(led_left_pct, 2),
+            "led_right_pct": round(led_right_pct, 2),
+            "led_signal_loss_fade_out_ms": int(max(0, led_signal_loss_fade_out_ms)),
+            "tracking_source": tracking_source,
+        }
+        if led_values_pct is not None:
+            payload["led_values_pct"] = [
+                round(min(max(value, 0.0), 100.0), 2)
+                for value in led_values_pct
+            ]
         return json.dumps(
-            {
-                "type": "servo",
-                "mode": mode,
-                "left_deg": round(left_deg, 2),
-                "right_deg": round(right_deg, 2),
-                "led_left_pct": round(led_left_pct, 2),
-                "led_right_pct": round(led_right_pct, 2),
-                "led_signal_loss_fade_out_ms": int(max(0, led_signal_loss_fade_out_ms)),
-                "tracking_source": tracking_source,
-            },
+            payload,
             ensure_ascii=False,
             separators=(",", ":"),
         )
@@ -141,6 +148,7 @@ class ESP32Link:
         tracking_source: str = "person_center",
         led_left_pct: float = 50.0,
         led_right_pct: float = 50.0,
+        led_values_pct: list[float] | None = None,
         led_signal_loss_fade_out_ms: int = 3000,
     ) -> str:
         payload = self.build_servo_command(
@@ -150,6 +158,7 @@ class ESP32Link:
             tracking_source=tracking_source,
             led_left_pct=led_left_pct,
             led_right_pct=led_right_pct,
+            led_values_pct=led_values_pct,
             led_signal_loss_fade_out_ms=led_signal_loss_fade_out_ms,
         )
         with self._lock:

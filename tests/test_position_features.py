@@ -8,14 +8,15 @@ from backend.vision.features import classify_distance, classify_horizontal_posit
 @pytest.mark.parametrize(
     ("area_ratio", "expected"),
     [
-        (0.31, "near"),
-        (0.12, "near"),
-        (0.08, "mid"),
-        (0.05, "far"),
+        (0.50, "near"),
+        (0.40, "near"),
+        (0.30, "mid"),
+        (0.20, "mid"),
+        (0.199, "far"),
     ],
 )
 def test_classify_distance_returns_three_interaction_ranges(area_ratio: float, expected: str) -> None:
-    assert classify_distance(area_ratio, near_threshold=0.12) == expected
+    assert classify_distance(area_ratio, near_threshold=0.40, mid_threshold=0.20) == expected
 
 
 @pytest.mark.parametrize(

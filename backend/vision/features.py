@@ -56,10 +56,11 @@ def classify_body_shape(bbox: list[int], frame_shape: tuple[int, int, int]) -> t
     return height_class, build_class
 
 
-def classify_distance(area_ratio: float, near_threshold: float) -> str:
+def classify_distance(area_ratio: float, near_threshold: float, mid_threshold: float | None = None) -> str:
+    mid_threshold = near_threshold / 2 if mid_threshold is None else mid_threshold
     if area_ratio >= near_threshold:
         return "near"
-    if area_ratio >= near_threshold / 2:
+    if area_ratio >= mid_threshold:
         return "mid"
     return "far"
 
