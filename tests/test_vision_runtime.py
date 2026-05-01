@@ -43,6 +43,103 @@ def test_browser_mode_never_opens_local_capture(monkeypatch):
     assert runtime.capture is None
 
 
+def test_open_capture_falls_back_to_next_windows_backend(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="backend")))
+    dshow_backend = getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)
+    msmf_backend = getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)
+    if dshow_backend == msmf_backend:
+        pytest.skip("OpenCV build does not expose distinct Windows camera backends")
+    created: list[int | None] = []
+
+    class FakeCapture:
+        def __init__(self, api_backend: int | None) -> None:
+            self.api_backend = api_backend
+            self.released = False
+
+        def isOpened(self) -> bool:
+            return True
+
+        def set(self, *_):
+            return True
+
+        def read(self):
+            if self.api_backend == msmf_backend:
+                return True, np.zeros((2, 2, 3), dtype=np.uint8)
+            return False, None
+
+        def release(self) -> None:
+            self.released = True
+
+    monkeypatch.setattr("backend.vision.runtime.platform.system", lambda: "Windows")
+
+    def fake_create_video_capture(device_index: int, api_backend: int | None = None):
+        assert device_index == 0
+        created.append(api_backend)
+        return FakeCapture(api_backend)
+
+    monkeypatch.setattr(runtime, "_create_video_capture", fake_create_video_capture)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    capture = runtime._open_capture()
+
+    assert capture.api_backend == msmf_backend
+    assert created[:2] == [dshow_backend, msmf_backend]
+
+
+def test_list_cameras_scans_past_first_five_indices(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="backend")))
+
+    class FakeCapture:
+        def set(self, *_):
+            return True
+
+        def get(self, *_):
+            return 640
+
+        def release(self) -> None:
+            return None
+
+    def fake_open_capture_for_index(device_index: int, *, require_frame: bool):
+        assert require_frame is True
+        if device_index == 5:
+            return "fake", FakeCapture()
+        return None, None
+
+    monkeypatch.setattr(runtime, "_camera_scan_limit", lambda: 6)
+    monkeypatch.setattr(runtime, "_open_capture_for_index", fake_open_capture_for_index)
+
+    cameras = runtime.list_cameras()
+
+    assert cameras[0]["device_id"] == "5"
+    assert cameras[0]["capture_backend"] == "fake"
+
+
+def test_camera_disabled_state_retries_after_cooldown(monkeypatch):
+    runtime = VisionRuntime(RuntimeConfig(camera=RuntimeConfig.Camera(source="backend")))
+    sleeps: list[float] = []
+
+    class ClosedCapture:
+        def isOpened(self) -> bool:
+            return False
+
+        def release(self) -> None:
+            return None
+
+    def fake_open_capture():
+        runtime.running = False
+        return ClosedCapture()
+
+    monkeypatch.setattr(runtime, "_open_capture", fake_open_capture)
+    monkeypatch.setattr(time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    runtime.camera_disabled = True
+    runtime.running = True
+    runtime._loop()
+
+    assert 5 in sleeps
+    assert runtime.camera_disabled is False
+
+
 def test_apply_camera_orientation_supports_horizontal_vertical_and_both_flips():
     frame = np.array(
         [

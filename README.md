@@ -59,6 +59,14 @@ http://127.0.0.1:8000/monitor
 
 監控頁會顯示 Python 後端相機的標註畫面、人物 bbox、tracking mode、YOLO FPS、servo 角度、serial 狀態與最近事件。`Python Camera` 按鈕會把 camera source 切回後端 OpenCV capture。
 
+注意：後端 OpenCV 只能讀取「執行 `backend.app` 那台電腦」本機作業系統看得到的 webcam。若瀏覽器測試可用但監控頁沒有畫面，先確認：
+
+- 後端程式是否真的跑在插著 webcam 的那台電腦上。
+- 瀏覽器測試頁、Teams、OBS 等程式是否還佔用著同一顆 webcam。
+- Windows 設定中的 Camera privacy 是否允許 desktop apps 存取相機。
+- 插上 webcam 後按監控頁的 `Refresh` / `Apply`，或等待後端自動重試。
+- 若系統有很多虛擬相機，可用 `MOMO_CAMERA_SCAN_LIMIT=15` 增加 OpenCV 掃描 index 上限。
+
 ## Position Audio
 
 人物偵測後會產生 `far/mid/near` 與 `left/center/right` 組成的九個狀態，例如 `near_left`、`mid_center`。`far_*` 狀態只更新狀態，不播放音效；`mid_*` 與 `near_*` 會在狀態切換時播放對應資料夾中的第一個音檔。

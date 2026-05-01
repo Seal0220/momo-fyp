@@ -23,6 +23,8 @@ from backend.vision.features import (
 )
 from backend.vision.person_detector import PersonDetector
 
+DEFAULT_CAMERA_SCAN_LIMIT = 10
+
 
 @dataclass
 class VisionState:
@@ -125,10 +127,9 @@ class VisionRuntime:
                 }
             ]
         cameras: list[dict] = []
-        for index in range(5):
-            cap = self._create_video_capture(index)
-            if not self._is_capture_opened(cap):
-                self._release_video_capture(cap)
+        for index in range(self._camera_scan_limit()):
+            api_name, cap = self._open_capture_for_index(index, require_frame=True)
+            if cap is None:
                 continue
             modes = []
             for width, height, fps in [(640, 480, 30), (1280, 720, 30), (1920, 1080, 30), (1280, 720, 60)]:
@@ -144,7 +145,14 @@ class VisionRuntime:
                 mode = {"width": got_w, "height": got_h, "fps": got_fps}
                 if mode not in modes:
                     modes.append(mode)
-            cameras.append({"device_id": str(index), "device_name": f"Camera {index}", "modes": modes})
+            cameras.append(
+                {
+                    "device_id": str(index),
+                    "device_name": f"Camera {index}",
+                    "capture_backend": api_name,
+                    "modes": modes,
+                }
+            )
             self._release_video_capture(cap)
         if not cameras:
             cameras.append(
@@ -159,10 +167,10 @@ class VisionRuntime:
     def _open_capture(self) -> cv2.VideoCapture:
         os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
         device_index = self._camera_device_index()
-        capture = self._create_video_capture(device_index)
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera.width)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera.height)
-        capture.set(cv2.CAP_PROP_FPS, self.config.camera.fps)
+        _, capture = self._open_capture_for_index(device_index, require_frame=True)
+        if capture is None:
+            capture = self._create_video_capture(device_index)
+            self._configure_capture(capture)
         return capture
 
     def _camera_device_index(self) -> int:
@@ -173,10 +181,60 @@ class VisionRuntime:
         except ValueError:
             return 0
 
-    def _create_video_capture(self, device_index: int) -> cv2.VideoCapture:
+    def _camera_scan_limit(self) -> int:
+        try:
+            return max(1, int(os.getenv("MOMO_CAMERA_SCAN_LIMIT", str(DEFAULT_CAMERA_SCAN_LIMIT))))
+        except ValueError:
+            return DEFAULT_CAMERA_SCAN_LIMIT
+
+    def _capture_api_candidates(self) -> list[tuple[str, int | None]]:
         if platform.system() == "Windows":
-            return cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
-        return cv2.VideoCapture(device_index)
+            candidates = [
+                ("dshow", getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)),
+                ("msmf", getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)),
+                ("any", cv2.CAP_ANY),
+            ]
+            unique: list[tuple[str, int | None]] = []
+            seen: set[int | None] = set()
+            for name, api_backend in candidates:
+                if api_backend in seen:
+                    continue
+                seen.add(api_backend)
+                unique.append((name, api_backend))
+            return unique
+        return [("default", None)]
+
+    def _create_video_capture(self, device_index: int, api_backend: int | None = None) -> cv2.VideoCapture:
+        if api_backend is None:
+            return cv2.VideoCapture(device_index)
+        return cv2.VideoCapture(device_index, api_backend)
+
+    def _open_capture_for_index(self, device_index: int, *, require_frame: bool) -> tuple[str | None, cv2.VideoCapture | None]:
+        for api_name, api_backend in self._capture_api_candidates():
+            capture = self._create_video_capture(device_index, api_backend)
+            self._configure_capture(capture)
+            if not self._is_capture_opened(capture):
+                self._release_video_capture(capture)
+                continue
+            if require_frame and not self._probe_capture_frame(capture):
+                self._release_video_capture(capture)
+                continue
+            return api_name, capture
+        return None, None
+
+    def _configure_capture(self, capture: cv2.VideoCapture) -> None:
+        with contextlib.suppress(cv2.error):
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera.width)
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera.height)
+            capture.set(cv2.CAP_PROP_FPS, self.config.camera.fps)
+
+    def _probe_capture_frame(self, capture: cv2.VideoCapture, attempts: int = 3) -> bool:
+        for _ in range(attempts):
+            ok, frame = self._read_capture_frame_from(capture)
+            if ok and frame is not None:
+                return True
+            time.sleep(0.03)
+        return False
 
     def _is_capture_opened(self, capture: cv2.VideoCapture) -> bool:
         try:
@@ -197,10 +255,12 @@ class VisionRuntime:
     def _read_capture_frame(self) -> tuple[bool, np.ndarray | None]:
         if self.capture is None:
             return False, None
+        return self._read_capture_frame_from(self.capture)
+
+    def _read_capture_frame_from(self, capture: cv2.VideoCapture) -> tuple[bool, np.ndarray | None]:
         try:
-            return self.capture.read()
+            return capture.read()
         except cv2.error:
-            self._release_capture()
             return False, None
 
     def _loop(self) -> None:
@@ -217,7 +277,10 @@ class VisionRuntime:
                         continue
                 continue
             if self.camera_disabled:
+                self._release_capture()
                 time.sleep(5)
+                self.failed_open_count = 0
+                self.camera_disabled = False
                 continue
             if not self.capture:
                 self.capture = self._open_capture()
@@ -235,6 +298,7 @@ class VisionRuntime:
                 self.failed_open_count += 1
                 if self.failed_open_count >= 3:
                     self.camera_disabled = True
+                    self._release_capture()
                 time.sleep(0.05)
                 continue
             self.failed_open_count = 0
