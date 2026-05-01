@@ -92,7 +92,7 @@ class RuntimeComponentStats(BaseModel):
     vram_mb: float | None = None
 
 
-class PositionAudioSnapshot(BaseModel):
+class AudioSnapshot(BaseModel):
     current_state: str = "unknown"
     active_states: list[str] = Field(default_factory=list)
     playing_states: list[str] = Field(default_factory=list)
@@ -131,7 +131,7 @@ class StatusSnapshot(BaseModel):
     serial_connected: bool = False
     yolo_detect_fps: float = 0.0
     yolo_person_runtime: RuntimeComponentStats = Field(default_factory=RuntimeComponentStats)
-    position_audio: PositionAudioSnapshot = Field(default_factory=PositionAudioSnapshot)
+    audio: AudioSnapshot = Field(default_factory=AudioSnapshot)
     light: LightSnapshot = Field(default_factory=LightSnapshot)
     event_log: list[str] = Field(default_factory=list)
 

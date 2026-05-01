@@ -29,6 +29,7 @@ def test_status_endpoint_returns_vision_serial_and_stats():
     assert "serial_monitor" in payload
     assert "yolo_person_runtime" in payload
     assert "yolo_detect_fps" in payload
+    assert "audio" in payload
 
 
 def test_status_endpoint_uses_cached_runtime_status_and_exposes_detect_fps():

@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import random
-import shutil
-import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.audio.playback import AudioPlaybackSettings, SUPPORTED_AUDIO_EXTENSIONS, play_audio_file_blocking
 from backend.interaction.roi import AUDIO_REGION_STATES, AudioRegionState
-from backend.types import PositionAudioSnapshot
+from backend.types import AudioSnapshot
 
-DEFAULT_INTERACTION_AUDIO_DIR = Path(__file__).resolve().parent / "interaction_states"
-SUPPORTED_AUDIO_EXTENSIONS = (".wav", ".mp3", ".m4a", ".ogg")
+DEFAULT_INTERACTION_AUDIO_DIR = Path(__file__).resolve().parent / "states"
 
 
 @dataclass(frozen=True)
@@ -30,10 +27,12 @@ class AudioController:
         self,
         state_dir: Path | str = DEFAULT_INTERACTION_AUDIO_DIR,
         play_file: Callable[[Path], None] | None = None,
+        playback_settings: AudioPlaybackSettings | None = None,
         rng: random.Random | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
-        self._play_file = play_file or play_audio_file_blocking
+        self.playback_settings = playback_settings or AudioPlaybackSettings()
+        self._play_file = play_file or (lambda path: play_audio_file_blocking(path, self.playback_settings))
         self._rng = rng or random.Random()
         self._channels = {
             state: _AudioChannel(
@@ -57,7 +56,7 @@ class AudioController:
             results.append(self._channels[state].trigger_if_idle())
         return results
 
-    def snapshot(self) -> PositionAudioSnapshot:
+    def snapshot(self) -> AudioSnapshot:
         playing_states = [
             state
             for state, channel in self._channels.items()
@@ -73,7 +72,7 @@ class AudioController:
             (channel.last_error for channel in self._channels.values() if channel.last_error),
             None,
         )
-        return PositionAudioSnapshot(
+        return AudioSnapshot(
             current_state=",".join(sorted(self.current_states)),
             active_states=sorted(self.current_states),
             playing_states=sorted(playing_states),
@@ -183,39 +182,3 @@ def ensure_interaction_audio_state_directories(state_dir: Path | str = DEFAULT_I
     root = Path(state_dir)
     for state in AUDIO_REGION_STATES:
         (root / state).mkdir(parents=True, exist_ok=True)
-
-
-def play_audio_file_blocking(path: Path) -> None:
-    suffix = path.suffix.lower()
-    if sys.platform == "win32" and suffix == ".wav":
-        import winsound
-
-        winsound.PlaySound(str(path), winsound.SND_FILENAME)
-        return
-
-    command = _playback_command(path)
-    if command is None:
-        raise RuntimeError(f"No audio playback backend available for {suffix} files")
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    process.wait()
-
-
-def _playback_command(path: Path) -> list[str] | None:
-    if sys.platform == "darwin":
-        return _command_if_available("afplay", str(path))
-    if sys.platform.startswith("linux"):
-        for command in (
-            _command_if_available("paplay", str(path)),
-            _command_if_available("aplay", str(path)),
-            _command_if_available("ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)),
-        ):
-            if command is not None:
-                return command
-    return None
-
-
-def _command_if_available(executable: str, *args: str) -> list[str] | None:
-    resolved = shutil.which(executable)
-    if resolved is None:
-        return None
-    return [resolved, *args]

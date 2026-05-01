@@ -291,7 +291,7 @@ function updateStatus(status) {
   const servo = status.servo || {};
   const serial = status.serial_monitor || {};
   const stats = status.stats || {};
-  const audio = status.position_audio || {};
+  const audio = status.audio || {};
   const light = status.light || {};
   const cameraDeviceId = status.camera_device_id || "default";
   const activeAudioStates = normalizeAudioStates(audio);

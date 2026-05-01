@@ -46,6 +46,12 @@ def test_device_mode_fields_expose_os_specific_enum():
     assert fields["light.super_close_bbox_threshold_ratio"].value == 0.35
     assert fields["light.fade_min_sec"].value == 0.25
     assert fields["light.fade_max_sec"].value == 2.0
+    assert fields["audio.fade_in_ms"].value == 80
+    assert fields["audio.fade_out_ms"].value == 180
+    assert fields["audio.reverb_enabled"].type == "boolean"
+    assert fields["audio.reverb_delay_ms"].value == 70
+    assert fields["audio.reverb_decay"].value == 0.28
+    assert fields["audio.reverb_mix"].value == 0.22
 
 
 def test_invalid_light_active_led_count_detected():
@@ -62,6 +68,26 @@ def test_invalid_light_fade_config_detected():
     errors = validate_runtime_config(config)
 
     assert "light.fade_max_sec must be >= light.fade_min_sec" in errors
+
+
+def test_invalid_audio_effect_config_detected():
+    config = RuntimeConfig(
+        audio=RuntimeConfig.Audio(
+            fade_in_ms=-1,
+            fade_out_ms=-1,
+            reverb_delay_ms=0,
+            reverb_decay=1.2,
+            reverb_mix=1.5,
+        )
+    )
+
+    errors = validate_runtime_config(config)
+
+    assert "audio.fade_in_ms must be >= 0" in errors
+    assert "audio.fade_out_ms must be >= 0" in errors
+    assert "audio.reverb_delay_ms must be between 1 and 2000" in errors
+    assert "audio.reverb_decay must be between 0 and 0.95" in errors
+    assert "audio.reverb_mix must be between 0 and 1" in errors
 
 
 def test_invalid_led_brightness_config_detected():

@@ -31,6 +31,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.audio.interaction_audio import AudioController
+from backend.audio.playback import AudioPlaybackSettings
 from backend.config import (
     CONFIG_FIELD_PATHS,
     CONFIG_GROUP_LABELS,
@@ -81,7 +82,10 @@ class Brain:
         self.state = RuntimeState()
         self.serial = ESP32Link(self.config.serial.port, self.config.serial.baud_rate)
         self.vision = VisionRuntime(self.config)
-        self.audio_controller = AudioController(self.config.audio.state_dir)
+        self.audio_controller = AudioController(
+            self.config.audio.state_dir,
+            playback_settings=self._audio_playback_settings(),
+        )
         self.light_controller = LightController(self.config.light)
         self.yolo_person_runtime = RuntimeComponentStats(
             requested_mode=self.config.yolo.device_mode,
@@ -159,6 +163,16 @@ class Brain:
             vram_mb=person_vram_mb,
         )
 
+    def _audio_playback_settings(self) -> AudioPlaybackSettings:
+        return AudioPlaybackSettings(
+            fade_in_ms=self.config.audio.fade_in_ms,
+            fade_out_ms=self.config.audio.fade_out_ms,
+            reverb_enabled=self.config.audio.reverb_enabled,
+            reverb_delay_ms=self.config.audio.reverb_delay_ms,
+            reverb_decay=self.config.audio.reverb_decay,
+            reverb_mix=self.config.audio.reverb_mix,
+        )
+
     def snapshot(self):
         vision = self.vision.get_snapshot()
         features = self._prepare_position_features(vision.features)
@@ -172,7 +186,7 @@ class Brain:
         snap.camera_mode = f"{self.config.camera.width}x{self.config.camera.height}@{self.config.camera.fps}"
         snap.yolo_detect_fps = self.vision.detect_fps()
         snap.yolo_person_runtime = self.yolo_person_runtime
-        snap.position_audio = self.audio_controller.snapshot()
+        snap.audio = self.audio_controller.snapshot()
         snap.light = self._light_snapshot()
         return snap
 
@@ -228,7 +242,7 @@ class Brain:
         features = self._prepare_position_features(vision.features)
         self.state.audience = features
         self.send_servo_for_features(features, vision.servo.tracking_source, vision.frame_shape, now)
-        self._update_position_audio_for_features(features, vision.frame_shape)
+        self._update_audio_for_features(features, vision.frame_shape)
 
         lock_threshold = self.config.tracking.lock_bbox_threshold_ratio
         unlock_threshold = self.config.tracking.unlock_bbox_threshold_ratio or lock_threshold
@@ -280,7 +294,7 @@ class Brain:
             }
         )
 
-    def _update_position_audio_for_features(
+    def _update_audio_for_features(
         self,
         features: AudienceFeatures,
         frame_shape: tuple[int, int] | None,
@@ -502,8 +516,14 @@ async def build_apply_checks(payload: dict, config: RuntimeConfig) -> list[dict[
     if changed & {
         "audio.state_dir",
         "audio.full_frame_threshold_ratio",
+        "audio.fade_in_ms",
+        "audio.fade_out_ms",
+        "audio.reverb_enabled",
+        "audio.reverb_delay_ms",
+        "audio.reverb_decay",
+        "audio.reverb_mix",
     }:
-        checks.append({"component": "audio", "status": "ok", "message": "Audio ROI and cue folder config updated."})
+        checks.append({"component": "audio", "status": "ok", "message": "Audio ROI, cue folder, fade, and reverb config updated."})
 
     if changed & {
         "light.side_led_count",
@@ -669,8 +689,11 @@ async def update_config(payload: dict):
     changed_keys = set(changed)
     brain.config = merged
 
-    if changed_keys & {"audio.state_dir"}:
-        brain.audio_controller = AudioController(brain.config.audio.state_dir)
+    if any(key.startswith("audio.") for key in changed_keys):
+        brain.audio_controller = AudioController(
+            brain.config.audio.state_dir,
+            playback_settings=brain._audio_playback_settings(),
+        )
         brain.audio_controller.ensure_state_directories()
 
     if any(key.startswith("light.") for key in changed_keys):
@@ -777,7 +800,7 @@ async def post_camera_frame(request: Request):
     if brain.config.camera.source == "browser":
         now = time.monotonic()
         brain.send_servo_for_features(features, state.servo.tracking_source, state.frame_shape, now)
-        brain._update_position_audio_for_features(features, state.frame_shape)
+        brain._update_audio_for_features(features, state.frame_shape)
     return {
         "track_id": features.track_id,
         "position_state": features.position_state,

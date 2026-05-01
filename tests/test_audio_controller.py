@@ -89,6 +89,20 @@ def test_audio_controller_can_retrigger_after_file_finishes(tmp_path: Path) -> N
     assert played == [audio_file, audio_file]
 
 
+def test_audio_controller_accepts_mp3_cues(tmp_path: Path) -> None:
+    audio_file = tmp_path / "full" / "cue.mp3"
+    audio_file.parent.mkdir()
+    audio_file.write_bytes(b"not-real-mp3")
+    played: list[Path] = []
+    controller = AudioController(tmp_path, play_file=played.append)
+
+    result = controller.update({"full"})
+    _wait_for(lambda: len(played) == 1)
+
+    assert result[0].status == "started"
+    assert played == [audio_file]
+
+
 def _wait_for(predicate) -> None:
     deadline = time.monotonic() + 1.0
     while not predicate() and time.monotonic() < deadline:

@@ -6,7 +6,7 @@ Momo 現在只保留 Python backend、人物偵測與 Arduino/ESP32 控制。後
 
 - `backend/`: FastAPI 長駐程式，負責 camera ingest、人物偵測、狀態機、servo/LED mapping、serial、telemetry。
 - `backend/vision/`: YOLO person detection、bbox 中心點、距離、衣著顏色與身形分類。
-- `backend/audio/states/`: 人物位置音效資料夾，使用 `near_left`、`mid_center` 這類英文狀態名稱放預錄音檔。
+- `backend/audio/states/`: 互動音效資料夾，使用 `no_one`、`left`、`center`、`right`、`full` 狀態放預錄音檔。
 - `backend/serial/`: ESP32 serial link 與 compact JSON command。
 - `backend/servo/`: 眼球 servo 幾何與角度計算。
 - `esp32/`: Arduino firmware 與硬體測試 sketch。
@@ -67,22 +67,21 @@ http://127.0.0.1:8000/monitor
 - 插上 webcam 後按監控頁的 `Refresh` / `Apply`，或等待後端自動重試。
 - 若系統有很多虛擬相機，可用 `MOMO_CAMERA_SCAN_LIMIT=15` 增加 OpenCV 掃描 index 上限。
 
-## Position Audio
+## Interaction Audio
 
-人物偵測後會產生 `far/mid/near` 與 `left/center/right` 組成的九個狀態，例如 `near_left`、`mid_center`。`far_*` 狀態只更新狀態，不播放音效；`mid_*` 與 `near_*` 會在狀態切換時播放對應資料夾中的第一個音檔。
+人物偵測後會依畫面區域觸發 `no_one`、`left`、`center`、`right`、`full` 五種互動音效狀態。左右/中間可依 ROI 同時或獨立播放；`full` 代表單一人物佔滿畫面時的全畫面狀態。
 
 請把預錄音檔放在：
 
 ```text
-backend/audio/states/near_left/
-backend/audio/states/near_center/
-backend/audio/states/near_right/
-backend/audio/states/mid_left/
-backend/audio/states/mid_center/
-backend/audio/states/mid_right/
+backend/audio/states/no_one/
+backend/audio/states/left/
+backend/audio/states/center/
+backend/audio/states/right/
+backend/audio/states/full/
 ```
 
-Windows 內建播放目前支援 `.wav`；macOS/Linux 會嘗試使用系統可用的播放工具。
+支援的音檔副檔名包含 `.wav`、`.mp3`、`.m4a`、`.ogg`。後端會用 `ffmpeg` / `imageio-ffmpeg` 解碼音檔，套用 reverb、開頭淡入與結尾淡出後，再透過內建 Python mixer 播放；不再使用舊的 `far/mid/near` 位置音效資料夾。
 
 ## ESP32
 

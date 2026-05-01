@@ -45,8 +45,14 @@ class RuntimeConfig(BaseModel):
         mid_bbox_threshold_ratio: float = 0.20
 
     class Audio(BaseModel):
-        state_dir: str = "backend/audio/interaction_states"
+        state_dir: str = "backend/audio/states"
         full_frame_threshold_ratio: float = 0.35
+        fade_in_ms: int = 150
+        fade_out_ms: int = 200
+        reverb_enabled: bool = True
+        reverb_delay_ms: int = 70
+        reverb_decay: float = 0.28
+        reverb_mix: float = 0.22
 
     class Light(BaseModel):
         side_led_count: int = 15
@@ -146,6 +152,12 @@ CONFIG_FIELD_PATHS: dict[str, tuple[str, str]] = {
     "distance.mid_bbox_threshold_ratio": ("distance", "mid_bbox_threshold_ratio"),
     "audio.state_dir": ("audio", "state_dir"),
     "audio.full_frame_threshold_ratio": ("audio", "full_frame_threshold_ratio"),
+    "audio.fade_in_ms": ("audio", "fade_in_ms"),
+    "audio.fade_out_ms": ("audio", "fade_out_ms"),
+    "audio.reverb_enabled": ("audio", "reverb_enabled"),
+    "audio.reverb_delay_ms": ("audio", "reverb_delay_ms"),
+    "audio.reverb_decay": ("audio", "reverb_decay"),
+    "audio.reverb_mix": ("audio", "reverb_mix"),
     "light.side_led_count": ("light", "side_led_count"),
     "light.active_led_count_per_cycle": ("light", "active_led_count_per_cycle"),
     "light.super_close_bbox_threshold_ratio": ("light", "super_close_bbox_threshold_ratio"),
@@ -201,6 +213,12 @@ LIVE_EDITABLE_CONFIG_KEYS = {
     "distance.mid_bbox_threshold_ratio",
     "audio.state_dir",
     "audio.full_frame_threshold_ratio",
+    "audio.fade_in_ms",
+    "audio.fade_out_ms",
+    "audio.reverb_enabled",
+    "audio.reverb_delay_ms",
+    "audio.reverb_decay",
+    "audio.reverb_mix",
     "light.side_led_count",
     "light.active_led_count_per_cycle",
     "light.super_close_bbox_threshold_ratio",
@@ -260,6 +278,12 @@ FIELD_DESCRIPTIONS: dict[str, tuple[str, str, str | None]] = {
     "distance.mid_bbox_threshold_ratio": ("中距離門檻", "人物 BBox 佔畫面比例達到此值時判定為中。", "0.001-0.95"),
     "audio.state_dir": ("聲音狀態資料夾", "包含 no_one、left、center、right、full 子資料夾的音檔根目錄。", None),
     "audio.full_frame_threshold_ratio": ("聲音全畫面門檻", "單一人物 BBox 佔畫面比例達到此值時觸發聲音全狀態。", "0.01-0.99"),
+    "audio.fade_in_ms": ("聲音淡入", "每段音效開頭淡入毫秒數。", ">=0 ms"),
+    "audio.fade_out_ms": ("聲音淡出", "每段音效結尾淡出毫秒數。", ">=0 ms"),
+    "audio.reverb_enabled": ("Reverb", "啟用內建混響效果。", None),
+    "audio.reverb_delay_ms": ("Reverb 延遲", "混響回聲延遲毫秒數。", "1-2000 ms"),
+    "audio.reverb_decay": ("Reverb 衰減", "每次回聲的衰減倍率。", "0-0.95"),
+    "audio.reverb_mix": ("Reverb 混合", "混響訊號混合比例。", "0-1"),
     "light.side_led_count": ("單側 LED 數量", "左右單側各自可控制的 LED 數量。", ">=1"),
     "light.active_led_count_per_cycle": ("每週期亮燈數", "每次閃爍週期中，單側隨機亮起的 LED 數量。", "1-單側數量"),
     "light.super_close_bbox_threshold_ratio": ("超近門檻", "單一人物 BBox 佔畫面比例達到此值時，燈光進入全狀態並恆亮 10A。", "0.01-0.99"),
@@ -391,6 +415,16 @@ def validate_runtime_config(candidate: RuntimeConfig) -> list[str]:
         errors.append("distance.mid_bbox_threshold_ratio must be < distance.near_bbox_threshold_ratio")
     if not 0.01 <= candidate.audio.full_frame_threshold_ratio <= 0.99:
         errors.append("audio.full_frame_threshold_ratio must be between 0.01 and 0.99")
+    if candidate.audio.fade_in_ms < 0:
+        errors.append("audio.fade_in_ms must be >= 0")
+    if candidate.audio.fade_out_ms < 0:
+        errors.append("audio.fade_out_ms must be >= 0")
+    if not 1 <= candidate.audio.reverb_delay_ms <= 2000:
+        errors.append("audio.reverb_delay_ms must be between 1 and 2000")
+    if not 0 <= candidate.audio.reverb_decay <= 0.95:
+        errors.append("audio.reverb_decay must be between 0 and 0.95")
+    if not 0 <= candidate.audio.reverb_mix <= 1:
+        errors.append("audio.reverb_mix must be between 0 and 1")
     if candidate.light.side_led_count < 1:
         errors.append("light.side_led_count must be >= 1")
     if candidate.light.active_led_count_per_cycle < 1:
