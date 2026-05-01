@@ -189,8 +189,6 @@ class _LightSideController:
         )
 
     def _next_state(self, *, is_present: bool, is_super_close: bool) -> LightSideStateName:
-        if self.state == "super_close":
-            return "super_close" if is_present else "empty"
         if is_super_close:
             return "super_close"
         if is_present:

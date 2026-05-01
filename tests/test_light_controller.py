@@ -154,7 +154,7 @@ def test_present_elapsed_is_measured_even_when_presence_starts_at_zero() -> None
     assert frame.left.brightness_level == 5.0
 
 
-def test_super_close_latches_until_side_is_empty() -> None:
+def test_super_close_returns_to_present_when_no_longer_super_close() -> None:
     controller = LightController(FakeLightConfig())
     first = controller.update(
         LightRoiState(
@@ -166,7 +166,7 @@ def test_super_close_latches_until_side_is_empty() -> None:
         ),
         now=1.0,
     )
-    still_latched = controller.update(
+    present = controller.update(
         LightRoiState(
             region="left",
             left_present=True,
@@ -191,5 +191,6 @@ def test_super_close_latches_until_side_is_empty() -> None:
     assert first.left.solid is True
     assert first.left.brightness_pct == 100.0
     assert first.left.led_values_pct == [100.0] * 15
-    assert still_latched.left.state == "super_close"
+    assert present.left.state == "present"
+    assert present.left.solid is False
     assert empty.left.state == "empty"
