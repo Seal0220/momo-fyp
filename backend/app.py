@@ -616,7 +616,7 @@ async def websocket_status(websocket: WebSocket):
         while True:
             await websocket.send_json(brain.snapshot().model_dump(mode="json"))
             await asyncio.sleep(STATUS_STREAM_INTERVAL_SEC)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError, OSError):
         return
 
 
@@ -760,7 +760,7 @@ async def websocket_camera_frames(websocket: WebSocket):
             if frame is not None:
                 await websocket.send_bytes(frame)
             await asyncio.sleep(interval_sec)
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, RuntimeError, OSError):
         return
 
 
@@ -807,8 +807,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--host", default=os.getenv("MOMO_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("MOMO_PORT", "8000")))
     parser.add_argument("--reload", action="store_true")
+    parser.add_argument("--ws-ping-interval", type=float, default=None)
+    parser.add_argument("--ws-ping-timeout", type=float, default=None)
     args = parser.parse_args(argv)
-    uvicorn.run("backend.app:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run(
+        "backend.app:app",
+        host=args.host,
+        port=args.port,
+        reload=args.reload,
+        ws_ping_interval=args.ws_ping_interval,
+        ws_ping_timeout=args.ws_ping_timeout,
+    )
 
 
 if __name__ == "__main__":
