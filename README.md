@@ -14,6 +14,16 @@ Momo 現在只保留 Python backend、人物偵測與 Arduino/ESP32 控制。後
 
 ## 安裝
 
+Windows 可直接執行：
+
+```bat
+install.bat
+```
+
+這會自動檢查 Python 3.11/3.12、安裝 `uv`，並執行 `uv sync --dev` 建立 `.venv` 與安裝專案依賴。
+
+也可以手動執行：
+
 ```bash
 uv sync
 ```
