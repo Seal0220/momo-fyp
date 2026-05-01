@@ -15,6 +15,11 @@ call :ensure_uv
 if errorlevel 1 goto :fail
 
 echo.
+echo Using uv:
+uv --version
+if errorlevel 1 goto :fail
+
+echo.
 echo Syncing project environment and dependencies...
 uv sync --dev
 if errorlevel 1 (
@@ -24,11 +29,20 @@ if errorlevel 1 (
 )
 
 echo.
-echo Verifying backend import...
-uv run python -c "import backend.app; print('backend import ok')"
+echo Ensuring WebSocket support...
+uv pip install --python ".venv\Scripts\python.exe" "websockets>=15.0.1"
 if errorlevel 1 (
     echo.
-    echo Backend import verification failed.
+    echo Failed to install WebSocket support.
+    goto :fail
+)
+
+echo.
+echo Verifying backend and WebSocket imports...
+uv run python -c "import backend.app; import websockets; print('backend and websockets import ok')"
+if errorlevel 1 (
+    echo.
+    echo Backend or WebSocket import verification failed.
     goto :fail
 )
 
@@ -79,12 +93,16 @@ exit /b 0
 :ensure_uv
 where uv >nul 2>nul
 if not errorlevel 1 (
-    echo uv is already installed.
-    uv --version
-    exit /b 0
+    uv --version >nul 2>nul
+    if not errorlevel 1 (
+        echo uv is already installed.
+        uv --version
+        exit /b 0
+    )
+    echo Found uv on PATH, but it did not run correctly. Installing uv with pip...
 )
 
-echo uv was not found. Installing uv with pip...
+if errorlevel 1 echo uv was not found. Installing uv with pip...
 %PYTHON_CMD% -m pip install --user uv
 if errorlevel 1 (
     echo.
@@ -92,19 +110,32 @@ if errorlevel 1 (
     exit /b 1
 )
 
-where uv >nul 2>nul
-if not errorlevel 1 (
-    echo uv installed successfully.
-    uv --version
-    exit /b 0
-)
-
 for /f "delims=" %%I in ('%PYTHON_CMD% -m site --user-base') do set "PYTHON_USER_BASE=%%I"
 set "USER_BIN=%PYTHON_USER_BASE%\Scripts"
 if exist "%USER_BIN%\uv.exe" (
     set "PATH=%USER_BIN%;%PATH%"
+)
+
+where uv >nul 2>nul
+if not errorlevel 1 (
+    uv --version >nul 2>nul
+    if not errorlevel 1 (
+        echo uv installed successfully.
+        uv --version
+        exit /b 0
+    )
+)
+
+if exist "%USER_BIN%\uv.exe" (
+    set "PATH=%USER_BIN%;%PATH%"
+    "%USER_BIN%\uv.exe" --version >nul 2>nul
+    if errorlevel 1 (
+        echo uv.exe exists but could not run:
+        echo %USER_BIN%\uv.exe
+        exit /b 1
+    )
     echo uv installed successfully.
-    uv --version
+    "%USER_BIN%\uv.exe" --version
     exit /b 0
 )
 
