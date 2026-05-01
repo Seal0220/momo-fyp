@@ -24,6 +24,7 @@ from backend.vision.features import (
 from backend.vision.person_detector import PersonDetector
 
 DEFAULT_CAMERA_SCAN_LIMIT = 10
+CaptureMode = tuple[int | None, int | None, int | None]
 
 
 @dataclass
@@ -53,6 +54,8 @@ class VisionRuntime:
         self.failed_open_count = 0
         self.camera_disabled = False
         self.external_frame_at: float | None = None
+        self.active_capture_backend: str | None = None
+        self.active_capture_mode: tuple[int, int, int] | None = None
         self.latest_state = VisionState(
             features=AudienceFeatures(),
             servo=ServoTelemetry(),
@@ -128,7 +131,7 @@ class VisionRuntime:
             ]
         cameras: list[dict] = []
         for index in range(self._camera_scan_limit()):
-            api_name, cap = self._open_capture_for_index(index, require_frame=True)
+            api_name, _, cap = self._open_capture_for_index(index, require_frame=True)
             if cap is None:
                 continue
             modes = []
@@ -167,10 +170,15 @@ class VisionRuntime:
     def _open_capture(self) -> cv2.VideoCapture:
         os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
         device_index = self._camera_device_index()
-        _, capture = self._open_capture_for_index(device_index, require_frame=True)
+        api_name, capture_mode, capture = self._open_capture_for_index(device_index, require_frame=True)
         if capture is None:
             capture = self._create_video_capture(device_index)
             self._configure_capture(capture)
+            self.active_capture_backend = None
+            self.active_capture_mode = None
+            return capture
+        self.active_capture_backend = api_name
+        self.active_capture_mode = capture_mode
         return capture
 
     def _camera_device_index(self) -> int:
@@ -192,8 +200,9 @@ class VisionRuntime:
             candidates = [
                 ("dshow", getattr(cv2, "CAP_DSHOW", cv2.CAP_ANY)),
                 ("msmf", getattr(cv2, "CAP_MSMF", cv2.CAP_ANY)),
-                ("any", cv2.CAP_ANY),
             ]
+            if os.getenv("MOMO_CAMERA_INCLUDE_CAP_ANY") == "1":
+                candidates.append(("any", cv2.CAP_ANY))
             unique: list[tuple[str, int | None]] = []
             seen: set[int | None] = set()
             for name, api_backend in candidates:
@@ -209,24 +218,72 @@ class VisionRuntime:
             return cv2.VideoCapture(device_index)
         return cv2.VideoCapture(device_index, api_backend)
 
-    def _open_capture_for_index(self, device_index: int, *, require_frame: bool) -> tuple[str | None, cv2.VideoCapture | None]:
-        for api_name, api_backend in self._capture_api_candidates():
-            capture = self._create_video_capture(device_index, api_backend)
-            self._configure_capture(capture)
-            if not self._is_capture_opened(capture):
-                self._release_video_capture(capture)
+    def _capture_mode_candidates(self) -> list[CaptureMode | None]:
+        configured = (self.config.camera.width, self.config.camera.height, self.config.camera.fps)
+        candidates: list[CaptureMode | None] = [
+            configured,
+            None,
+            (640, 480, 30),
+            (640, 480, 15),
+            (1280, 720, 30),
+            (1280, 720, 15),
+            (1920, 1080, 30),
+        ]
+        unique: list[CaptureMode | None] = []
+        seen: set[CaptureMode | None] = set()
+        for mode in candidates:
+            if mode in seen:
                 continue
-            if require_frame and not self._probe_capture_frame(capture):
-                self._release_video_capture(capture)
-                continue
-            return api_name, capture
-        return None, None
+            seen.add(mode)
+            unique.append(mode)
+        return unique
 
-    def _configure_capture(self, capture: cv2.VideoCapture) -> None:
+    def _open_capture_for_index(
+        self,
+        device_index: int,
+        *,
+        require_frame: bool,
+    ) -> tuple[str | None, tuple[int, int, int] | None, cv2.VideoCapture | None]:
+        for api_name, api_backend in self._capture_api_candidates():
+            for mode in self._capture_mode_candidates():
+                capture = self._create_video_capture(device_index, api_backend)
+                if not self._is_capture_opened(capture):
+                    self._release_video_capture(capture)
+                    break
+                self._configure_capture(capture, mode)
+                if require_frame and not self._probe_capture_frame(capture):
+                    self._release_video_capture(capture)
+                    continue
+                return api_name, self._capture_mode(capture, mode), capture
+        return None, None, None
+
+    def _configure_capture(self, capture: cv2.VideoCapture, mode: CaptureMode | None = None) -> None:
+        if mode is None:
+            return
+        width, height, fps = mode
         with contextlib.suppress(cv2.error):
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.camera.width)
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.camera.height)
-            capture.set(cv2.CAP_PROP_FPS, self.config.camera.fps)
+            if width is not None:
+                capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            if height is not None:
+                capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            if fps is not None:
+                capture.set(cv2.CAP_PROP_FPS, fps)
+
+    def _capture_mode(self, capture: cv2.VideoCapture, fallback: CaptureMode | None = None) -> tuple[int, int, int] | None:
+        try:
+            width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = int(round(capture.get(cv2.CAP_PROP_FPS) or 0))
+        except cv2.error:
+            width = height = fps = 0
+        if width > 0 and height > 0:
+            return width, height, fps
+        if fallback is None:
+            return None
+        fallback_width, fallback_height, fallback_fps = fallback
+        if fallback_width is None or fallback_height is None or fallback_fps is None:
+            return None
+        return fallback_width, fallback_height, fallback_fps
 
     def _probe_capture_frame(self, capture: cv2.VideoCapture, attempts: int = 3) -> bool:
         for _ in range(attempts):

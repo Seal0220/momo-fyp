@@ -62,6 +62,15 @@ def test_open_capture_falls_back_to_next_windows_backend(monkeypatch):
         def set(self, *_):
             return True
 
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                return 640
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                return 480
+            if prop == cv2.CAP_PROP_FPS:
+                return 30
+            return 0
+
         def read(self):
             if self.api_backend == msmf_backend:
                 return True, np.zeros((2, 2, 3), dtype=np.uint8)
@@ -83,7 +92,59 @@ def test_open_capture_falls_back_to_next_windows_backend(monkeypatch):
     capture = runtime._open_capture()
 
     assert capture.api_backend == msmf_backend
-    assert created[:2] == [dshow_backend, msmf_backend]
+    assert dshow_backend in created
+    assert msmf_backend in created
+    assert created.index(dshow_backend) < created.index(msmf_backend)
+
+
+def test_open_capture_falls_back_to_common_camera_mode(monkeypatch):
+    runtime = VisionRuntime(
+        RuntimeConfig(camera=RuntimeConfig.Camera(source="backend", width=1920, height=1080, fps=12))
+    )
+
+    class FakeCapture:
+        def __init__(self) -> None:
+            self.width = 0
+            self.height = 0
+            self.fps = 0
+
+        def isOpened(self) -> bool:
+            return True
+
+        def set(self, prop, value):
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                self.width = int(value)
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                self.height = int(value)
+            if prop == cv2.CAP_PROP_FPS:
+                self.fps = int(value)
+            return True
+
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                return self.width
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                return self.height
+            if prop == cv2.CAP_PROP_FPS:
+                return self.fps
+            return 0
+
+        def read(self):
+            if (self.width, self.height, self.fps) == (640, 480, 30):
+                return True, np.zeros((2, 2, 3), dtype=np.uint8)
+            return False, None
+
+        def release(self) -> None:
+            return None
+
+    monkeypatch.setattr(runtime, "_capture_api_candidates", lambda: [("fake", None)])
+    monkeypatch.setattr(runtime, "_create_video_capture", lambda *_: FakeCapture())
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    runtime._open_capture()
+
+    assert runtime.active_capture_backend == "fake"
+    assert runtime.active_capture_mode == (640, 480, 30)
 
 
 def test_list_cameras_scans_past_first_five_indices(monkeypatch):
@@ -102,8 +163,8 @@ def test_list_cameras_scans_past_first_five_indices(monkeypatch):
     def fake_open_capture_for_index(device_index: int, *, require_frame: bool):
         assert require_frame is True
         if device_index == 5:
-            return "fake", FakeCapture()
-        return None, None
+            return "fake", (640, 480, 30), FakeCapture()
+        return None, None, None
 
     monkeypatch.setattr(runtime, "_camera_scan_limit", lambda: 6)
     monkeypatch.setattr(runtime, "_open_capture_for_index", fake_open_capture_for_index)
