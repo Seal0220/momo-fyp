@@ -29,8 +29,8 @@ Adafruit_NeoPixel ledsAlwaysOn1(NUM_LEDS, LED_ALWAYS_ON_1_PIN, NEO_GRB + NEO_KHZ
 Adafruit_NeoPixel ledsAlwaysOn2(NUM_LEDS, LED_ALWAYS_ON_2_PIN, NEO_GRB + NEO_KHZ800);
 
 constexpr uint8_t STRIP_RED = 255;
-constexpr uint8_t STRIP_GREEN = 255;
-constexpr uint8_t STRIP_BLUE = 255;
+constexpr uint8_t STRIP_GREEN = 0;
+constexpr uint8_t STRIP_BLUE = 0;
 // ================================================
 
 float currentLeft = 87.0f;
